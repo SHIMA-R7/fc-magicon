@@ -9,8 +9,8 @@ PJ-324M,1,J2,PJ-324M,3.5mm ステレオジャック(SHVC-SOUND-ESP32 と同じ)
 ピンヘッダー or ピンソケット 2x30,1,J4,PinHeader_2x30_P2.54mm_Vertical,カセット60ピンのブレイクアウト。必要な時だけでもよい
 ピンヘッダー 2x8,1,J5,PinHeader_2x08_P2.54mm_Vertical,デバッグ用(内部信号)
 ピンヘッダー 1x4(任意),1,J6,PinHeader_1x04_P2.54mm_Vertical,USB の予備ランド(5V/D-/D+/GND)。FPC 側と同時に機器をつながない
-2SC1815,1,Q1,TO-92_Inline_Wide,TO-92 NPN。足は平らな面から E-C-B。他の小信号NPNでも可(足順に注意)
-0Ω(ジャンパー線でも可),1,R1,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,CIRAM /CE ← /A13
+2SC1815,1,Q1,TO-92_Inline_Wide,TO-92 NPN。足は平らな面から E-C-B。他の小信号NPNでも可(足順に注意)。下(J4 側)へ倒して付ける
+0Ω(ジャンパー線でも可),1,R1,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,CIRAM /CE ← /A13。裏面に付ける(表は Q1 を倒す場所)。表の足先は短く切る
 15kΩ 1/4W,1,R2,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 22kΩ 1/4W,1,R3,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 4.7kΩ 1/4W,1,R4,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,

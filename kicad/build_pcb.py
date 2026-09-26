@@ -50,7 +50,8 @@ PLACEMENT = [
     # 右の列
     ("R2", 0, "1", 13.5, 19.5), ("R3", 0, "1", 13.5, 22.7),
     # コンデンサーは足を縦に並べる(右へ寝かせるには、倒す向きと足の並びが直角でないといけない)
-    ("C3", 90, "1", 14.5, 28.4), ("C4", 90, "1", 15.0, 34.0), ("Q1", 0, "1", 13.5, 39.0), ("R1", 0, "1", 13.5, 43.0),
+    ("C3", 90, "1", 14.5, 28.4), ("C4", 90, "1", 15.0, 34.0), ("Q1", 0, "1", 13.5, 39.0),
+    ("R1", 0, "1", 13.5, 43.0),
     # 右側
     # DIP-20(SN74LVC245AN)。180°回して、出力(B側)をモジュール側の左列へ、入力(A側)を空いている右列へ向ける
     ("U2", 180, "1", 71.62, 29.36),
@@ -68,6 +69,24 @@ POWER_NETS = ["/+5V", "/VBUS_MOD", "/+3V3", "/GND"]   # 回路図のネット名
 
 # 右へ寝かせるコンデンサー: (記号, 倒した本体の長さ, 幅, 有極性)。電解 φ5×高さ11mm、セラミックは 5mm 程度
 LAYDOWN = [("C1", 12.5, 6.0, True), ("C4", 12.5, 6.0, True), ("C2", 6.5, 4.5, False), ("C3", 6.5, 4.5, False)]
+# 下へ倒す部品: (リファレンス, 足の下端からの長さ, 幅, 左端の下限)。Q1(TO-92)は本体 約5 x 5mm。J4 のコートヤード(y 48.18)の手前まで
+LAYDOWN_DOWN = [("Q1", 5.2, 5.3, 14.45)]   # 4つ目 = 左端の下限。裏付けの R1 の①の足先(x 13.5)に掛からないよう切る(本体は足先の上に少し浮いて載る)
+# 裏面に付ける部品(パッドの位置はそのまま、本体だけ裏へ)。R1 は Q1 を下へ倒す場所に掛かるため(2026-09-26、ユーザー判断)
+BACK_PARTS = {"R1"}
+
+
+def to_back(fp):
+    """部品を裏面へ移す。パッドの位置と番号は変えない(反転で左右が入れ替わった分を、180°回して戻す)"""
+    before = {p.GetNumber(): (p.GetPosition().x, p.GetPosition().y) for p in fp.Pads()}
+    fp.Flip(fp.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
+    after = {p.GetNumber(): (p.GetPosition().x, p.GetPosition().y) for p in fp.Pads()}
+    if after != before:
+        fp.Rotate(fp.GetPosition(), pcbnew.EDA_ANGLE(180, pcbnew.DEGREES_T))
+        a1 = {p.GetNumber(): (p.GetPosition().x, p.GetPosition().y) for p in fp.Pads()}
+        n = next(iter(before))
+        fp.Move(pcbnew.VECTOR2I(before[n][0] - a1[n][0], before[n][1] - a1[n][1]))
+    after = {p.GetNumber(): (p.GetPosition().x, p.GetPosition().y) for p in fp.Pads()}
+    assert after == before, (fp.GetReference(), before, after)
 
 
 def hole(c, r):
@@ -259,6 +278,8 @@ def place():
             p = pad_pos(fp, anchor)
             t = V(x, y)
             fp.Move(pcbnew.VECTOR2I(t.x - p.x, t.y - p.y))
+        if ref in BACK_PARTS:
+            to_back(fp)
     for ref in ("J4", "J5"):
         print(f"  {ref}: 回転 {fit_socket(add(ref), ref)}°")
     for ref in ("P1", "P2", "P3", "P4"):
@@ -318,6 +339,8 @@ def place():
     # コンデンサーは足を曲げて右へ寝かせられるよう、倒した本体が載る範囲をコートヤード(部品禁止)にしてシルクで描く
     for ref, length, width, polar in LAYDOWN:
         lay_down(board.FindFootprintByReference(ref), length, width, polar)
+    for ref, length, width, x_min in LAYDOWN_DOWN:
+        lay_down_below(board.FindFootprintByReference(ref), length, width, x_min)
 
     # シルク
     text(board, "FC-MAGICON rev0.2", W / 2, 40.5, 1.2)
@@ -325,7 +348,7 @@ def place():
     text(board, "FPC", MOD_X + 17.5, MOD_Y + 10.0, 0.8, top=False)
     # J4 ブレイクアウトの列番号(上の列 = カセット 31〜60番、下の列 = 1〜30番)
     board.FindFootprintByReference("J4").Reference().SetVisible(False)
-    for k in (0, 9, 14, 19, 24, 29):        # 5/35 は R1 と重なるので省く
+    for k in (0, 9, 14, 19, 24, 29):        # 5/35 は Q1(下へ倒す)の枠と重なるので省く
         text(board, f"{k + 1}/{k + 31}", W / 2 - 36.83 + 2.54 * k, J4_Y - 2.3, 0.8, top=False)
     text(board, "31-60", 3.6, J4_Y, 0.8, top=False)
     text(board, "1-30", 3.6, J4_Y + 2.54, 0.8, top=False)
@@ -418,6 +441,30 @@ def label_j6(board):
         text(board, s, pcbnew.ToMM(p.x) - OX, pcbnew.ToMM(p.y) - OY + 2.4, 0.8, top=False)
     p = pad_pos(j6, "4")
     text(board, "USB", pcbnew.ToMM(p.x) - OX + 3.3, pcbnew.ToMM(p.y) - OY, 0.8, top=False)
+
+
+def lay_down_below(fp, length, width, x_min=None):
+    """足の下端から下へ length、足の並びの中心から左右 width/2 を、倒した本体の置き場にする(コートヤードは元と合わせた長方形1つ)。"""
+    pads = list(fp.Pads())
+    y0 = max(pcbnew.ToMM(p.GetBoundingBox().GetBottom()) for p in pads) - OY + 0.1
+    xs = [pcbnew.ToMM(p.GetPosition().x) - OX for p in pads]
+    cx = (min(xs) + max(xs)) / 2
+    old = [it for it in fp.GraphicalItems() if it.GetLayer() == pcbnew.F_CrtYd]
+    bx0 = min(pcbnew.ToMM(it.GetBoundingBox().GetLeft()) for it in old) - OX
+    bx1 = max(pcbnew.ToMM(it.GetBoundingBox().GetRight()) for it in old) - OX
+    by0 = min(pcbnew.ToMM(it.GetBoundingBox().GetTop()) for it in old) - OY
+    for it in old:
+        fp.Remove(it)
+    for layer, (sx, sy, ex, ey), w in (
+            (pcbnew.F_CrtYd, (max(min(bx0, cx - width / 2 - 0.25), x_min or -1e9), by0, max(bx1, cx + width / 2 + 0.25), y0 + length), 0.05),
+            (pcbnew.F_SilkS, (max(cx - width / 2, (x_min or -1e9) + 0.25), y0 + 0.3, cx + width / 2, y0 + length - 0.2), 0.12)):
+        s = pcbnew.PCB_SHAPE(fp)
+        s.SetShape(pcbnew.SHAPE_T_RECTANGLE)
+        s.SetStart(V(sx, sy))
+        s.SetEnd(V(ex, ey))
+        s.SetLayer(layer)
+        s.SetWidth(MM(w))
+        fp.Add(s)
 
 
 def lay_down(fp, length, width, polar):
@@ -524,3 +571,8 @@ def import_ses():
 
 if __name__ == "__main__":
     {"place": place, "import": import_ses, "reroute": prep_reroute}[sys.argv[1]]()
+
+
+
+
+

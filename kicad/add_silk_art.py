@@ -1,4 +1,4 @@
-"""裏面シルクにロゴ・MADE BY SHIMA-R7・小さなスペック表を置く(配線済みの基板に後から足す)。
+"""裏面シルクにロゴ・MADE BY SHIMA-R7・小さなスペック表、表面シルクにロゴ(小)を置く(配線済みの基板に後から足す)。
     python make_silk_logo.py → E:\\KiCad\\bin\\python.exe add_silk_art.py
   置いた物は PCB_GROUP "SILK_ART" にまとめる。もう一度実行すると前の分を消してから置き直す。
   場所は find_free_silk.py で調べた空き(座標は部品面から見た基板座標、左上が原点):
@@ -34,11 +34,14 @@ SPEC = [
 ]
 
 board = pcbnew.LoadBoard(PCB)
-for g in list(board.Groups()):
+# 前に置いた SILK_ART と、build_pcb.py の place が置いた表の「FC-MAGICON rev0.2」(表面ロゴに置き換える)を消す。
+# 消した後に一覧を取り直すと SWIG の参照が壊れるので、消す物を先に全部集めてからまとめて消す
+doomed = [d for d in board.GetDrawings() if d.GetClass() == "PCB_TEXT" and d.GetText() == "FC-MAGICON rev0.2"]
+for g in board.Groups():
     if g.GetName() == "SILK_ART":
-        for it in list(g.GetItems()):
-            board.Remove(it)
-        board.Remove(g)
+        doomed += list(g.GetItems()) + [g]
+for it in doomed:
+    board.Remove(it)
 grp = pcbnew.PCB_GROUP(board)
 grp.SetName("SILK_ART")
 board.Add(grp)
@@ -80,13 +83,31 @@ text("MADE BY SHIMA-R7", LOGO_CX, MADE_Y, 1.3, 1.2, 0.2, pcbnew.GR_TEXT_H_ALIGN_
 for i, s in enumerate(SPEC):
     text(s, SPEC_R, SPEC_Y + i * SPEC_P, 1.0, 0.8, 0.15, pcbnew.GR_TEXT_H_ALIGN_LEFT)
 
+# 表面のロゴ: 「FC-MAGICON rev0.2」の文字(x 36〜54 / y 42.5〜44.5)の所に置き換える(2026-09-26、ユーザー指定)。
+# 左右反転なし。裏と同じ矩形を FRONT_W / logo["w"] 倍に縮める(いちばん細い線は約 0.17mm、JLCPCB の最小 0.15mm ぎりぎり)
+FRONT_CX, FRONT_Y, FRONT_W = 45.0, 42.4, 19.5
+k = FRONT_W / logo["w"]
+for x0, y0, x1, y1 in logo["rects"]:
+    s = pcbnew.PCB_SHAPE(board)
+    s.SetShape(pcbnew.SHAPE_T_RECT)
+    s.SetStart(V(FRONT_CX - FRONT_W / 2 + x0 * k, FRONT_Y + y0 * k))
+    s.SetEnd(V(FRONT_CX - FRONT_W / 2 + x1 * k, FRONT_Y + y1 * k))
+    s.SetFilled(True)
+    s.SetWidth(0)
+    s.SetLayer(pcbnew.F_SilkS)
+    add(s)
+t = pcbnew.PCB_TEXT(board)
+t.SetText("rev0.2")
+t.SetLayer(pcbnew.F_SilkS)
+t.SetTextSize(pcbnew.VECTOR2I(MM(0.8), MM(0.8)))
+t.SetTextThickness(MM(0.15))
+t.SetHorizJustify(pcbnew.GR_TEXT_H_ALIGN_LEFT)
+t.SetPosition(V(FRONT_CX + FRONT_W / 2 + 0.6, FRONT_Y + logo["h"] * k / 2))
+add(t)
+
+print("SILK_ART", len(logo["rects"]), "rects x 2,", len(SPEC) + 2, "texts")
 board.Save(PCB)
-bb = grp.GetBoundingBox()
-print("SILK_ART", len(logo["rects"]), "rects,", len(SPEC) + 1, "texts")
-for t in grp.GetItems():
-    if t.GetClass() == "PCB_TEXT":
-        b = t.GetBoundingBox()
-        print(f"  {t.GetText():18} x {pcbnew.ToMM(b.GetLeft()) - OX:6.2f}..{pcbnew.ToMM(b.GetRight()) - OX:6.2f}  "
-              f"y {pcbnew.ToMM(b.GetTop()) - OY:6.2f}..{pcbnew.ToMM(b.GetBottom()) - OY:6.2f}")
+
+
 
 
