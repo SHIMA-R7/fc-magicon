@@ -1,0 +1,37 @@
+; FC-MAGICON bus_test: ファミコン CPU バスの PRG 応答(GPIO0〜31 の窓で使う)
+;   GPIO0-7   CPU D0-D7(出力はここだけ)
+;   GPIO8-22  CPU A0-A14
+;   GPIO23    /ROMSEL(= !(A15 & M2))
+;   GPIO24    R/W
+;
+; 1 サイクルの流れ:
+;   /ROMSEL が Low になる → GPIO0〜31 を読んで RX FIFO へ(自動 push)
+;   → CPU(コア1)が ROM を引いて「データ(8bit)+方向(8bit)」を TX FIFO へ
+;   → D0〜D7 に出す(書き込みサイクルなら方向 0 = 出さない)
+;   → /ROMSEL が High に戻ったらバスを放す
+.program cpu_bus
+.wrap_target
+    wait 0 gpio 23          ; /ROMSEL = Low(カセットの $8000-$FFFF が選ばれた)
+    in pins, 32             ; アドレスと R/W を読む(autopush)
+    pull block              ; コア1の答え
+    out pins, 8             ; D0-D7 の値
+    out pindirs, 8          ; 0xFF = 出す / 0x00 = 出さない
+    wait 1 gpio 23          ; サイクルの終わり
+    mov osr, null
+    out pindirs, 8          ; バスを放す
+.wrap
+
+% c-sdk {
+static inline void cpu_bus_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = cpu_bus_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 0);
+    sm_config_set_out_pins(&c, 0, 8);
+    sm_config_set_in_shift(&c, false, true, 32);     // 左詰め、32bit で自動 push
+    sm_config_set_out_shift(&c, true, false, 32);    // 右から取り出す、pull は手動
+    for (uint i = 0; i < 8; i++)
+        pio_gpio_init(pio, i);
+    pio_sm_set_consecutive_pindirs(pio, sm, 0, 8, false);   // 最初は出さない
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
