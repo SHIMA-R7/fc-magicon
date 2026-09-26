@@ -45,6 +45,11 @@ def nsf(src, data):
 
 def main():
     src, dst = sys.argv[1], sys.argv[2]
+    if src == "--remote":               # 画面転送(リモートデスクトップ)モードで起動する印
+        data = b"FCRD"
+        open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
+        print(f"画面転送モード -> {dst}")
+        return
     data = open(src, "rb").read()
     if data[:5] == b"NESM\x1a":
         if not nsf(src, data):

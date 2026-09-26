@@ -16,7 +16,7 @@ ABS = {"sta": 0x8D, "stx": 0x8E, "sty": 0x8C, "lda_abs": 0xAD, "bit": 0x2C, "jmp
        "lda_absx": 0xBD, "inc_abs": 0xEE, "dec_abs": 0xCE, "rol_abs": 0x2E, "cmp_abs": 0xCD, "and_abs": 0x2D,
        "ora_abs": 0x0D, "eor_abs": 0x4D, "ldx_abs": 0xAE, "ldy_abs": 0xAC, "sta_absx": 0x9D, "sta_absy": 0x99,
        "lda_absy": 0xB9, "adc_abs": 0x6D, "sbc_abs": 0xED}
-ZP = {"inc_zp": 0xE6, "lda_zp": 0xA5, "sta_zp": 0x85}
+ZP = {"inc_zp": 0xE6, "lda_zp": 0xA5, "sta_zp": 0x85, "ora_zp": 0x05, "and_zp": 0x25, "dec_zp": 0xC6}
 REL = {"bpl": 0x10, "bmi": 0x30, "bne": 0xD0, "beq": 0xF0, "bcc": 0x90, "bcs": 0xB0}
 
 
@@ -96,4 +96,5 @@ def write_header(path, name, rom, listing, comment):
         for i in range(0, len(rom), 16):
             f.write("    " + ", ".join(f"0x{x:02X}" for x in rom[i:i + 16]) + ",\n")
         f.write("};\n")
+
 

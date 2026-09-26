@@ -8,6 +8,10 @@
 //                       例 "120:T:5,300:R:3"
 //     --out DIR         書き出す場所(既定 sim_out)
 //     --wav             音を DIR/audio.wav に書く
+//     --keys LIST       ファミリーベーシックのキーボードをつなぎ、キーを押す: "フレーム:キー名:長さ,..."(キー名は KB_NAMES)
+//                       例 "100:A:3,110:RETURN:3,120:LSHIFT+1:3"(+ で同時押し)
+//     --remote-frame F  画面転送モード: F(tools/nesframe.py の write_frame)を PC から届いた 1 枚として渡す
+//     --remote-at N     それを渡すフレーム(既定 30)
 //   DIR/hashes.txt に毎フレームの画面のハッシュを書く(native と magicon を比べるため)。
 //
 // magicon のモードでは、CPU の全サイクルと PPU の読み出しを、実機の PIO と同じ形の値にして cart.c に渡す
@@ -25,6 +29,54 @@ bool host_irq;
 bool agnes_load_magicon(agnes_t *agnes);
 static uint64_t n_irq_cycles;
 
+// ---- ファミリーベーシックのキーボード(HVC-007)の真似(--keys)。nesdev の表のとおり ----
+//   $4016 に書く: bit0 = 行 0 へ戻す、bit1 = 列(1 → 0 で次の行)、bit2 = 有効。$4017 の bit1-4 = 4 キー(押すと 0)
+//   KB_NAMES[行][i]: i = 0〜3 は列 0 の bit4〜bit1、i = 4〜7 は列 1 の bit4〜bit1
+static const char *KB_NAMES[9][8] = {
+    {"]", "[", "RETURN", "F8", "STOP", "YEN", "RSHIFT", "KANA"},
+    {";", ":", "@", "F7", "^", "-", "/", "_"},
+    {"K", "L", "O", "F6", "0", "P", ",", "."},
+    {"J", "U", "I", "F5", "8", "9", "N", "M"},
+    {"H", "G", "Y", "F4", "6", "7", "V", "B"},
+    {"D", "R", "T", "F3", "4", "5", "C", "F"},
+    {"A", "S", "W", "F2", "3", "E", "Z", "X"},
+    {"CTR", "Q", "ESC", "F1", "2", "1", "GRPH", "LSHIFT"},
+    {"LEFT", "RIGHT", "UP", "CLRHOME", "INS", "DEL", "SPACE", "DOWN"},
+};
+static bool kb_attached, kb_en;
+static int kb_row, kb_col;
+static bool kb_down[9][8];
+
+static void kb_write(uint8_t v) {
+    int col = (v >> 1) & 1;
+    kb_en = v & 4;
+    if (v & 1) kb_row = 0;
+    else if (kb_col == 1 && col == 0) kb_row++;
+    kb_col = col;
+}
+static int kb_read(void) {
+    if (!kb_en || kb_row > 8) return 0x1E & 0;                       // 無効の時は全部 0(nesdev)
+    int bits = 0x1E;
+    for (int i = 0; i < 4; i++)
+        if (kb_down[kb_row][kb_col * 4 + i]) bits &= ~(0x10 >> i);   // i = 0 → bit4
+    return bits;
+}
+static bool kb_set(const char *name, bool down) {
+    for (int r = 0; r < 9; r++)
+        for (int i = 0; i < 8; i++)
+            if (!strcmp(KB_NAMES[r][i], name)) { kb_down[r][i] = down; return true; }
+    return false;
+}
+// 6502 が $5F01-$5F09 に書いた 9 バイト(下位 4 ビット = 列 0 の bit1-4、上位 4 ビット = 列 1、押すと 0)を名前にする
+static void kb_decode(const uint8_t *rows, char *out, size_t n) {
+    out[0] = 0;
+    for (int r = 0; r < 9; r++)
+        for (int i = 0; i < 8; i++) {
+            int bit = i < 4 ? (3 - i) : (7 - (i - 4));
+            if (!(rows[r] >> bit & 1)) { strncat(out, KB_NAMES[r][i], n - strlen(out) - 1); strncat(out, " ", n - strlen(out) - 1); }
+        }
+}
+
 // ---- agnes_magicon.c から呼ばれる差し込み口 ----
 static uint32_t cpu_sample(uint16_t addr, bool rw, uint8_t data) {   // cpu_m2.pio が読む GPIO0-31 と同じ並び
     uint32_t v = ((uint32_t)(addr & 0x7FFF) << 8) | (1u << 25) | data;
@@ -39,10 +91,12 @@ int sim_cpu_read(uint16_t addr, uint64_t cycle) {
         if (((r >> 8) & 0xFF) == 0xFF) return r & 0xFF;          // カセットが出した
     }
     if (addr == 0x4015) return apu_status(cycle);
+    if (addr == 0x4017 && kb_attached) return kb_read();             // 2コンは無し(bit0 = 0)
     return -1;
 }
 
 void sim_cpu_write(uint16_t addr, uint8_t val, uint64_t cycle) {
+    if (addr == 0x4016) kb_write(val);
     if (addr >= 0x4000 && addr <= 0x4017) apu_write(addr, val, cycle);
     if (magicon_on) {
         cart_host_cpu(cpu_sample(addr, false, 0));                   // 1 回目: アドレス(M2 が上がった所)
@@ -92,7 +146,8 @@ static uint64_t frame_hash(agnes_t *ag) {
 typedef struct { int frame, len; char buttons[9]; } press_t;
 
 int main(int argc, char **argv) {
-    const char *rom_path = NULL, *out = "sim_out", *press_list = "";
+    const char *rom_path = NULL, *out = "sim_out", *press_list = "", *keys_list = "", *remote_frame = NULL;
+    int remote_at = 30;
     int frames = 600, shot_every = 60;
     bool wav = false;
     for (int i = 1; i < argc; i++) {
@@ -102,6 +157,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) press_list = argv[++i];
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!strcmp(argv[i], "--wav")) wav = true;
+        else if (!strcmp(argv[i], "--keys") && i + 1 < argc) { keys_list = argv[++i]; kb_attached = true; }
+        else if (!strcmp(argv[i], "--remote-frame") && i + 1 < argc) remote_frame = argv[++i];
+        else if (!strcmp(argv[i], "--remote-at") && i + 1 < argc) remote_at = atoi(argv[++i]);
         else rom_path = argv[i];
     }
     if (!rom_path) {
@@ -134,7 +192,9 @@ int main(int argc, char **argv) {
     if (magicon_on) {
         const char *err = cart_load(data, (uint32_t)len, &info);
         if (err) { fprintf(stderr, "magicon: %s\n", err); return 1; }
-        if (info.is_nsf)
+        if (info.is_remote)
+            printf("magicon: remote desktop mode\n");
+        else if (info.is_nsf)
             printf("magicon: NSF \"%s\" %d songs  load $%04X init $%04X play $%04X%s\n", info.nsf_title, info.nsf_songs,
                    info.nsf_load, info.nsf_init, info.nsf_play, info.nsf_banked ? " banked" : "");
         else
@@ -166,6 +226,29 @@ int main(int argc, char **argv) {
             }
         }
         agnes_set_input(ag, &in, NULL);
+        for (const char *p = keys_list; *p;) {                       // キーボード: このフレームで押されているキー
+            int kf, kl;
+            char names[64];
+            if (sscanf(p, "%d:%63[^:]:%d", &kf, names, &kl) == 3) {
+                bool down = fr >= kf && fr < kf + kl;
+                for (char *t = strtok(names, "+"); t; t = strtok(NULL, "+"))
+                    if (down || fr == kf + kl) kb_set(t, down);
+            }
+            const char *c = strchr(p, ',');
+            if (!c) break;
+            p = c + 1;
+        }
+        if (remote_frame && fr == remote_at) {                       // PC から 1 枚届いた
+            FILE *rf = fopen(remote_frame, "rb");
+            uint8_t buf[15360 + 32 + 64 + 3];
+            if (!rf || fread(buf, 1, sizeof buf, rf) != sizeof buf) { fprintf(stderr, "cannot read %s\n", remote_frame); return 2; }
+            fclose(rf);
+            uint8_t *back = cart_remote_back();
+            if (!back) { fprintf(stderr, "remote: back buffer busy\n"); return 1; }
+            memcpy(back, buf, 15360);
+            cart_remote_commit(buf + 15360, buf + 15360 + 32, buf[15456], buf[15457], buf[15458]);
+            printf("  frame %5d  remote frame committed\n", fr);
+        }
         if (!agnes_next_frame(ag)) {
             fprintf(stderr, "frame %d: CPU stopped (illegal opcode)\n", fr);
             break;
@@ -176,9 +259,20 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof path, "%s/frame%05d.bmp", out, fr);
             write_bmp(path, ag);
         }
-        if (fr % 60 == 0 && magicon_on) {
+        if (fr % 60 == 0 && magicon_on && !info.is_remote) {
             printf("  frame %5d  cart writes %u\n", fr, stat_wr - last_wr);
             last_wr = stat_wr;
+        }
+        if (magicon_on && info.is_remote) {                          // 6502 が書いたパッド・キーボードが変わったら表示
+            static uint8_t last[16];
+            uint8_t io[16];
+            cart_remote_io(io);
+            if (memcmp(io, last, 15)) {
+                char k[256];
+                kb_decode(io + 1, k, sizeof k);
+                printf("  frame %5d  pad %02X  keys [%s] (6502 frame %u)\n", fr, io[0], k, io[15]);
+                memcpy(last, io, 16);
+            }
         }
     }
     fclose(hf);

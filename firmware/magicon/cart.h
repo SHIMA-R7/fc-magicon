@@ -10,6 +10,7 @@ typedef struct {
     uint32_t prg_size, chr_size;        // chr_size = 0 なら CHR-RAM(8KB)
     bool vertical;                      // ヘッダーのミラーリング(1 = 垂直)
     bool battery;
+    bool is_remote;                     // 画面転送(リモートデスクトップ)モード
     // NSF の時
     bool is_nsf, nsf_banked;
     uint8_t nsf_songs, nsf_start, nsf_exp;          // nsf_exp = 拡張音源のビット(まだ鳴らさない)
@@ -25,6 +26,11 @@ void cart_load_fallback(cart_info_t *info);
 void cart_start(void);
 
 extern volatile uint32_t stat_cpu, stat_ppu, stat_wr;
+
+// 画面転送モード(コア0 / PC の試験台から使う)
+uint8_t *cart_remote_back(void);        // 裏の絵(256 x 240、2 ビット、15360 バイト)。表示待ちがある時は NULL
+void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, int cy, bool visible);
+void cart_remote_io(uint8_t out[16]);   // [0] パッド、[1..9] キーボード 9 行、[15] フレームの数
 
 #ifdef CART_HOST                        // PC の試験台(firmware/sim)用
 uint32_t cart_host_cpu(uint32_t v);     // PIO0 のサンプル → 答え(0xFFFFFFFF = 答えない)

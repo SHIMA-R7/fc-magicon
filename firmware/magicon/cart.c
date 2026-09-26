@@ -24,6 +24,7 @@
 #endif
 #include "cart.h"
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
+#include "remote_driver.h"              // 画面転送モードの 6502 プログラムとカーソル(gen_remote_driver.py)
 #include "nsf_driver.h"                 // NSF プレイヤーのドライバー($5000-)・画面の土台・CHR(gen_nsf_driver.py)
 
 #define PIN_IRQ     45                  // High で Q1 が /IRQ を Low にする
@@ -41,6 +42,7 @@ static uint8_t *prg, *chr;
 static uint32_t prg_size, chr_size;     // chr_size は CHR-RAM の時 0x2000
 static bool chr_is_ram;
 static int mapper;
+static bool is_remote;                  // 画面転送モード(下の「画面転送」)
 
 static uint8_t *prg_map[4];             // $8000 / $A000 / $C000 / $E000 の 8KB
 static uint8_t *chr_map[8];             // $0000〜$1FFF の 1KB ずつ
@@ -441,6 +443,7 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     chr8(0);
     memset(wram, 0, sizeof wram);
     is_nsf = true;
+    is_remote = false;
     nsf_banked = info->nsf_banked;      // $5FF8-$5FFF の書き込みを効かせるか(PC の試験台で見つけた抜け)
     mapper = -1;
     is_mmc3 = false;
@@ -448,6 +451,168 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     set_mirror(MIR_V);
     return NULL;
 }
+
+// ---- 画面転送(リモートデスクトップ) ----
+// PC から来た 256 x 240 ドット(2 ビット)の絵を、PPU のパターンの読み出しに直接返す(gen_remote_driver.py の説明を参照)。
+//   絵: タイル行 r(0〜29)、行の中の y(0〜7)、列 c(0〜31)、面 p(0/1)の 1 バイト = fb[((r * 8 + y) * 32 + c) * 2 + p]
+//   付随: パレット 32 + 属性 64 + OAM 256(カーソル)。$5D00-$5EFF で 6502 が読む
+// 絵と付随は 2 組ずつ持ち、PC から 1 枚届いたら(rd_ready)、画面の最後(行 29 → 行 0 に戻った所)で表と裏を入れ替える。
+#define RD_FB_SIZE (30 * 8 * 32 * 2)    // 15360
+typedef struct {
+    uint8_t pal[32], attr[64], oam[256];
+} rd_meta_t;
+static uint8_t *rd_fb_front, *rd_fb_back;                // rom[] の先頭を使う(ゲームを読まないので)
+static rd_meta_t rd_meta[2], *rd_meta_front = &rd_meta[0], *rd_meta_back = &rd_meta[1];
+static volatile bool rd_ready;                            // コア0: 裏が埋まった → コア1: 入れ替えたら false
+static uint rd_last_trow, rd_group;                       // 今のタイル行 % 8、8 行ごとの組(0〜3)
+static uint8_t rd_spr[0x1000];                            // スプライト($1000)のパターン: カーソル 4 タイル
+static uint8_t rd_io[0x100];                              // $5F00-$5FFF: 6502 が書くパッド・キーボード
+static const uint8_t *rd_prg;                             // 6502 のプログラム(16KB、$8000 と $C000 に同じもの)
+
+static inline __attribute__((always_inline)) uint32_t remote_ppu_access(uint32_t v) {
+    stat_ppu++;
+    if (v & B_PPU_A13)
+        return 0;                                             // ネームテーブル・属性: 本体の VRAM が出す
+    uint a = v & 0x1FFF;
+    if (a & 0x1000)
+        return 0xFF00u | rd_spr[a & 0xFFF];                   // スプライト(カーソル)
+    uint tile = a >> 4, trow = tile >> 5;
+    if (trow != rd_last_trow) {
+        if (trow == 0) {
+            if (rd_last_trow == 7) {
+                rd_group++;                                   // 行 7 → 8、15 → 16、23 → 24
+            } else {                                          // 行 29 → 0: 1 枚描き終わった
+                rd_group = 0;
+                if (rd_ready) {
+                    uint8_t *f = rd_fb_front; rd_fb_front = rd_fb_back; rd_fb_back = f;
+                    rd_meta_t *m = rd_meta_front; rd_meta_front = rd_meta_back; rd_meta_back = m;
+                    rd_ready = false;
+                }
+            }
+        }
+        rd_last_trow = trow;
+    }
+    uint row = rd_group * 8 + trow;
+    if (row > 29)
+        row = 29;
+    return 0xFF00u | rd_fb_front[((row * 8 + (a & 7)) * 32 + (tile & 31)) * 2 + ((a >> 3) & 1)];
+}
+
+static void __not_in_flash_func(remote_write)(uint addr, uint d) {
+    stat_wr++;
+    if ((addr & 0xFF00) == 0x5F00)
+        rd_io[addr & 0xFF] = d;
+}
+
+static inline __attribute__((always_inline)) uint32_t remote_cpu_access(uint32_t v) {
+    if (wr_pending) {
+        wr_pending = false;
+        remote_write(wr_addr, v & 0xFF);
+        return NO_REPLY;
+    }
+    stat_cpu++;
+    uint a = (v >> 8) & 0x7FFF;
+    if (!(v & B_RW)) {
+        wr_pending = true;
+        wr_addr = (v & B_ROMSEL) ? a : 0x8000 | a;
+        return 0;
+    }
+    if (!(v & B_ROMSEL))                                      // $8000-$FFFF: 6502 のプログラム
+        return 0xFF00u | rd_prg[a & 0x3FFF];
+    switch (a & 0x7F00) {
+    case 0x5D00: return 0xFF00u | ((a & 0xFF) < 32 ? rd_meta_front->pal[a & 0x1F] : rd_meta_front->attr[((a & 0xFF) - 32) & 63]);
+    case 0x5E00: return 0xFF00u | rd_meta_front->oam[a & 0xFF];
+    case 0x5F00: return 0xFF00u | rd_io[a & 0xFF];
+    }
+    return 0;
+}
+
+#ifndef CART_HOST
+static void __not_in_flash_func(remote_bus_loop)(void) {
+    io_ro_32 *cpu_rx = &pio0->rxf[0], *ppu_rx = &pio1->rxf[0];
+    io_wo_32 *cpu_tx = &pio0->txf[0], *ppu_tx = &pio1->txf[0];
+    for (;;) {
+        if (!pio_sm_is_rx_fifo_empty(pio1, 0))
+            *ppu_tx = remote_ppu_access(*ppu_rx);
+        if (!pio_sm_is_rx_fifo_empty(pio0, 0)) {
+            uint32_t r = remote_cpu_access(*cpu_rx);
+            if (r != NO_REPLY)
+                *cpu_tx = r;
+        }
+    }
+}
+#endif
+
+static void rd_default_meta(rd_meta_t *m) {
+    static const uint8_t pal[32] = {0x0F, 0x00, 0x10, 0x30, 0x0F, 0x00, 0x10, 0x30, 0x0F, 0x00, 0x10, 0x30, 0x0F, 0x00, 0x10, 0x30,
+                                    0x0F, 0x30, 0x0F, 0x0F, 0x0F, 0x30, 0x0F, 0x0F, 0x0F, 0x30, 0x0F, 0x0F, 0x0F, 0x30, 0x0F, 0x0F};
+    memcpy(m->pal, pal, 32);                                  // 背景 = 黒・濃い灰・薄い灰・白、カーソル = 白 + 黒のふち
+    memset(m->attr, 0, sizeof m->attr);
+    memset(m->oam, 0xF0, sizeof m->oam);                      // スプライトは全部画面の外
+}
+
+static void rd_text(uint8_t *fb, int row, int col, const char *s) {   // NSF のフォント(色 3 = 白)で絵に字を書く
+    for (; *s && col < 32; s++, col++)
+        for (int y = 0; y < 8; y++) {
+            uint8_t g = nsfd_chr[(uint8_t)*s * 16 + y];
+            fb[((row * 8 + y) * 32 + col) * 2] = g;
+            fb[((row * 8 + y) * 32 + col) * 2 + 1] = g;
+        }
+}
+
+static const char *remote_load(cart_info_t *info) {
+    memset(info, 0, sizeof *info);
+    info->is_remote = true;
+    rd_prg = remote_prg;
+    rd_fb_front = rom;
+    rd_fb_back = rom + RD_FB_SIZE;
+    memset(rom, 0, 2 * RD_FB_SIZE);
+    rd_text(rd_fb_front, 12, 8, "FC-MAGICON REMOTE");
+    rd_text(rd_fb_front, 15, 9, "WAITING FOR PC...");
+    rd_default_meta(&rd_meta[0]);
+    rd_default_meta(&rd_meta[1]);
+    rd_meta_front = &rd_meta[0];
+    rd_meta_back = &rd_meta[1];
+    rd_ready = false;
+    rd_last_trow = rd_group = 0;
+    memset(rd_spr, 0, sizeof rd_spr);
+    memcpy(rd_spr, remote_spr_chr, sizeof remote_spr_chr);
+    memset(rd_io, 0xFF, sizeof rd_io);
+    rd_io[0] = 0;
+    is_remote = true;
+    is_nsf = false;
+    mapper = -1;
+    is_mmc3 = false;
+    mir = -1;
+    set_mirror(MIR_V);                                        // どれでもよい(ネームテーブルは 2 画面とも同じ並び)
+    return NULL;
+}
+
+// コア0(USB)から使う。裏の絵を返す(まだ表示待ちの 1 枚がある時は NULL)
+uint8_t *cart_remote_back(void) { return rd_ready ? NULL : rd_fb_back; }
+// 裏の絵を書き終えたら、パレット 32・属性 64・カーソル(x, y、visible)を付けて渡す。次の画面の切れ目で表示される
+void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, int cy, bool visible) {
+    rd_meta_t *m = rd_meta_back;
+    memcpy(m->pal, pal, 32);
+    memcpy(m->attr, attr, 64);
+    memset(m->oam, 0xF0, sizeof m->oam);
+    if (visible) {
+        for (int i = 0; i < 4; i++) {
+            int y = cy + (i >> 1) * 8, x = cx + (i & 1) * 8;
+            if (y > 239 || x > 255) continue;
+            m->oam[i * 4] = (uint8_t)(y - 1);                // スプライトの Y は 1 ライン遅れて表示される
+            m->oam[i * 4 + 1] = (uint8_t)i;
+            m->oam[i * 4 + 2] = 0;
+            m->oam[i * 4 + 3] = (uint8_t)x;
+        }
+    }
+#ifndef CART_HOST
+    __dmb();
+#endif
+    rd_ready = true;
+}
+// 6502 が書いたパッド・キーボード: [0] パッド、[1..9] キーボード 9 行、[15] フレームの数
+void cart_remote_io(uint8_t out[16]) { memcpy(out, rd_io, 16); }
 
 // ---- 読み込み ----
 const char *cart_mapper_name(int m) {
@@ -466,6 +631,7 @@ const char *cart_mapper_name(int m) {
 
 static void reset_map(const cart_info_t *info) {
     is_nsf = false;
+    is_remote = false;
     mapper = info->mapper;
     is_mmc3 = mapper == 4;
     prg = rom;
@@ -492,6 +658,8 @@ static void reset_map(const cart_info_t *info) {
 }
 
 const char *cart_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
+    if (len >= 4 && memcmp(p, "FCRD", 4) == 0)             // 画面転送モード(load_rom.ps1 -Remote)
+        return remote_load(info);
     if (len >= 5 && memcmp(p, "NESM\x1A", 5) == 0)
         return nsf_load(p, len, info);
     if (len < 16 || memcmp(p, "NES\x1A", 4) != 0)
@@ -557,14 +725,19 @@ void cart_start(void) {
     set_mirror(m);                                           // reset_map で決めたミラーリングを PIO に反映
     ppu_chr_program_init(pio1, 0, pio_add_program(pio1, &ppu_chr_program));
     cpu_m2_program_init(pio0, 0, pio_add_program(pio0, &cpu_m2_program));
-    multicore_launch_core1(is_nsf ? nsf_bus_loop : bus_loop);
+    multicore_launch_core1(is_remote ? remote_bus_loop : is_nsf ? nsf_bus_loop : bus_loop);
 }
 #else
 // PC の試験台から呼ぶ入口(PIO のサンプルと同じ形の値を渡し、答えを受け取る)
-uint32_t cart_host_cpu(uint32_t v) { return is_nsf ? nsf_cpu_access(v) : cpu_access(v); }
-uint32_t cart_host_ppu(uint32_t v) { return ppu_access(v); }
+uint32_t cart_host_cpu(uint32_t v) { return is_remote ? remote_cpu_access(v) : is_nsf ? nsf_cpu_access(v) : cpu_access(v); }
+uint32_t cart_host_ppu(uint32_t v) { return is_remote ? remote_ppu_access(v) : ppu_access(v); }
 int cart_host_mirror(void) { return mir; }
-uint8_t cart_host_peek_chr(uint a) { return chr_map[(a >> 10) & 7][a & 0x3FF]; }   // 数えない読み出し(絵を描くだけの時)
+uint8_t cart_host_peek_chr(uint a) {
+    if (is_remote)                      // 画面転送: スプライトだけ(背景は位置を数える読み出しで描く)
+        return (a & 0x1000) ? rd_spr[a & 0xFFF] : 0;
+    return chr_map[(a >> 10) & 7][a & 0x3FF];
+}   // 数えない読み出し(絵を描くだけの時)
 #endif
+
 
 

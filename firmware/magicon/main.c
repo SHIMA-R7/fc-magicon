@@ -40,7 +40,7 @@ static const char *load_from_flash(cart_info_t *info) {
     const uint8_t *nes = (const uint8_t *)(h + 1);
     if (memcmp(h->magic, "FCMG", 4) != 0)
         return "no ROM in flash (write one with load_rom.ps1)";
-    if (h->len < 16 || h->len > 4u * 1024 * 1024)
+    if (h->len < 4 || h->len > 4u * 1024 * 1024)        // 4 = 画面転送モードの印 "FCRD"
         return "bad length in flash header";
     uint32_t sum = 0;
     for (uint32_t i = 0; i < h->len; i++)
@@ -48,6 +48,55 @@ static const char *load_from_flash(cart_info_t *info) {
     if (sum != h->sum)
         return "checksum mismatch (write the ROM again)";
     return cart_load(nes, h->len, info);
+}
+
+// ---- 画面転送モードの USB のやりとり(コア0) ----
+//   PC → カセット: "FCFR" + 絵 15360 + パレット 32 + 属性 64 + カーソル x, y, visible(3)
+//                  絵は裏の画面へ直接読み込む。表示待ちの 1 枚がある間は読まない(PC 側がそこで待たされる)
+//   カセット → PC: "FCIN" + パッド 1 + キーボード 9 行 + 予備 5 + 6502 のフレームの数 1(= 16)
+//                  6502 のフレームの数が変わるたびに(約 60 回/秒)
+static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
+    int got = 0;
+    absolute_time_t until = make_timeout_time_ms(timeout_ms);
+    while (got < len) {
+        int n = stdio_get_until((char *)buf + got, len - got, until);
+        if (n <= 0) return got;         // PICO_ERROR_TIMEOUT
+        got += n;
+    }
+    return got;
+}
+
+static void send_input(uint8_t *last_frame) {
+    uint8_t io[16];
+    cart_remote_io(io);
+    if (io[15] == *last_frame) return;
+    *last_frame = io[15];
+    uint8_t pkt[20] = {'F', 'C', 'I', 'N'};
+    memcpy(pkt + 4, io, 16);
+    stdio_put_string((const char *)pkt, sizeof pkt, false, false);
+}
+
+static void __attribute__((noreturn)) remote_loop(void) {
+    static uint8_t meta[32 + 64 + 3];
+    uint8_t last_frame = 0, c;
+    uint32_t match = 0;
+    for (;;) {
+        send_input(&last_frame);
+        // "FCFR" を探す(途中から読み始めても合うように 1 バイトずつ)
+        if (read_exact(&c, 1, 1) != 1) continue;
+        match = (match << 8) | c;
+        if (match != ('F' << 24 | 'C' << 16 | 'F' << 8 | 'R')) continue;
+        match = 0;
+        uint8_t *back;
+        while (!(back = cart_remote_back())) {           // 前の 1 枚がまだ表示されていない
+            send_input(&last_frame);
+            sleep_us(200);
+        }
+        if (read_exact(back, 15360, 500) != 15360) continue;
+        if (read_exact(meta, sizeof meta, 500) != (int)sizeof meta) continue;
+        cart_remote_commit(meta, meta + 32, meta[96], meta[97], meta[98]);
+        gpio_xor_mask64(1ull << PIN_LED);                 // 1 枚ごとに LED を反転
+    }
 }
 
 int main(void) {
@@ -73,6 +122,8 @@ int main(void) {
     }
     gpio_put(PIN_LED, 1);
     cart_start();
+    if (!err && info.is_remote)
+        remote_loop();                  // 戻らない
 
     uint32_t lc = 0, lp = 0, lw = 0;
     for (;;) {
