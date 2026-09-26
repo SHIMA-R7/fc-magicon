@@ -34,7 +34,7 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 | `kicad/bom.py`, `print_bom.ps1` | 部品表(`bom.csv`)の作成と印刷 |
 | `kicad/print_core2350b_pinmap.ps1`, `print_fit_check.ps1` | Core2350B のピン照合シート、実寸の現物合わせシートの印刷 |
 | `kicad/check_nets.py`, `drc_summary.py` | 回路図の簡易チェック、DRC レポートの集計 |
-| `3d/` | 基板の STEP(`FC-MAGICON_r0.2_parts.step` 部品あり / `_board.step` 基板だけ)。`make_models.py` → `export_step.py`(KiCad の Python)で作り直す。原点は基板の左上、Y は上向き(基板は Y 0〜-65.8) |
+| `3d/` | 基板の STEP(`FC-MAGICON_r0.2_parts.step` 部品あり / `_board.step` 基板だけ / `FC-MAGICON.step` 部品あり版を Autodesk で読み込んで書き出し直したもの)。`make_models.py` → `export_step.py`(KiCad の Python)で作り直す。原点は基板の左上、Y は上向き(基板は Y 0〜-65.8) |
 | `kicad/print_part_guide.ps1` | 部品案内図(表・裏、原寸)の印刷 |
 | `case/label/` | カセット表面のシール(`make_label.py` → `label.png`、`print_label.ps1` で A4 に印刷)。99 x 60.6mm、ケースの穴(J3/J5/J6/VR1/SW/Core2350B2)は原寸 |
 | `case/*.py` | ケースの元データ(下記)の寸法を調べたスクリプトと、基板の部品の占有範囲(`parts.json`) |
