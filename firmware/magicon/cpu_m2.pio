@@ -1,0 +1,50 @@
+; FC-MAGICON magicon: ファミコン CPU バスの応答(GPIO0〜31 の窓で使う)
+;   GPIO0-7   CPU D0-D7(出力はここだけ)
+;   GPIO8-22  CPU A0-A14
+;   GPIO23    /ROMSEL(= !(A15 & M2))
+;   GPIO24    R/W   ← JMP_PIN にも設定する
+;   GPIO25    M2
+;
+; bus_test(/ROMSEL で起きる)と違い、M2 で起きて CPU の全サイクルをコアへ渡す。
+;   ・$6000-$7FFF(WRAM)は /ROMSEL が High のままなので、/ROMSEL だけでは拾えない
+;   ・$2000-$2007 への書き込み(CHR-RAM を作るため $2006/$2007 を横から読む)も拾う
+;
+; 1 サイクルの流れ:
+;   M2 が上がる → 80ns 待つ(/ROMSEL は本体の 74LS139 を通るので M2 より遅れる)→ GPIO0〜31 を読んで push
+;   → コアの答え「データ(8bit)+方向(8bit)」で D0〜D7 を出す(読み出しで、カセットの領域の時だけ方向 0xFF)
+;   → 書き込みサイクルなら、M2 が下がった所でもう一度読んで push(書き込みデータは M2 の後半で確定する)
+;   → バスを放す
+.program cpu_m2
+.wrap_target
+    wait 1 gpio 25          ; M2 = High
+    nop [19]                ; 約 80ns(250MHz)
+    in pins, 32             ; アドレス・/ROMSEL・R/W(autopush)
+    pull block              ; コアの答え
+    out pins, 8             ; D0-D7 の値
+    out pindirs, 8          ; 0xFF = 出す / 0x00 = 出さない
+    jmp pin rd              ; R/W = High なら読み出し
+    wait 0 gpio 25          ; 書き込み: M2 が下がった時点のデータ
+    in pins, 32             ; 2 回目の push(コアは「書き込みの続き」として受け取る)
+    jmp done
+rd:
+    wait 0 gpio 25          ; 読み出し: サイクルの終わり
+done:
+    mov osr, null
+    out pindirs, 8          ; バスを放す
+.wrap
+
+% c-sdk {
+static inline void cpu_m2_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = cpu_m2_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 0);
+    sm_config_set_out_pins(&c, 0, 8);
+    sm_config_set_jmp_pin(&c, 24);                   // R/W
+    sm_config_set_in_shift(&c, false, true, 32);     // 32bit で自動 push
+    sm_config_set_out_shift(&c, true, false, 32);    // 右から取り出す、pull は手動
+    for (uint i = 0; i < 8; i++)
+        pio_gpio_init(pio, i);
+    pio_sm_set_consecutive_pindirs(pio, sm, 0, 8, false);   // 最初は出さない
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

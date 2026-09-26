@@ -1,0 +1,22 @@
+; FC-MAGICON magicon: ミラーリング。CIRAM A10(GPIO43)に PPU A10 か A11 を写し続ける(GPIO16〜47 の窓で使う)
+;   垂直ミラー = PPU A10(GPIO36)、水平ミラー = PPU A11(GPIO37)。IN_BASE を切り替えて選ぶ
+;   1画面ミラーは SM を止めて `set pins` で 0 / 1 に固定する
+;   JP1(MCU)を閉じた時だけ効く。JP2 / JP3 の時は GPIO43 はどこにもつながらない
+;   1 周 = 1 命令(4ns)。入力の同期 2 段と合わせて遅れは 12ns 程度
+.program mirror
+.wrap_target
+    mov pins, pins
+.wrap
+
+% c-sdk {
+static inline void mirror_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = mirror_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 36);                   // 絶対番号(SDK が GPIO ベースを差し引く)
+    sm_config_set_out_pins(&c, 43, 1);
+    sm_config_set_set_pins(&c, 43, 1);
+    pio_gpio_init(pio, 43);
+    pio_sm_set_consecutive_pindirs(pio, sm, 43, 1, true);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

@@ -9,7 +9,8 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 ## 現状(2026-09-26)
 
 - **基板 rev0.2 の設計が完了(2層、DRC エラー0・未接続0)。未発注・未実装。**
-- ファームウェア: 動作確認用の `bus_test`(CPU バスでテスト ROM を返して音を鳴らす)と `chr_test`(PPU に CHR を返して画面に格子模様を出す)を作成、ビルド済み。[`firmware/`](firmware/README.md)
+- ファームウェア: 動作確認用の `bus_test`(CPU バスでテスト ROM を返して音を鳴らす)と `chr_test`(PPU に CHR を返して画面に格子模様を出す)、
+  マジコン本体の `magicon`(.nes を動かす。NROM/MMC1/UxROM/CNROM/MMC3/AxROM、PRG + CHR 384KB まで)を作成、ビルド済み。未実機。[`firmware/`](firmware/README.md)
 - rev0.1 からの変更: USB の予備ランド(J6)、拡張音源の音量用の半固定抵抗 VR1(KOA KVSF637AC104)を追加、
   電源・音声の配線を太くした(+5V 0.8mm、VBUS 0.6mm、GND 0.5mm、+3V3 0.4mm、音声 0.4mm)、J5 の 12〜14番を GND に。
 - ガーバー: [`kicad/FC-MAGICON_gerber_r0.2.zip`](kicad/FC-MAGICON_gerber_r0.2.zip)(発注の指定は下の「基板の発注」)

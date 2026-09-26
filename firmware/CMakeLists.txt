@@ -15,3 +15,4 @@ pico_sdk_init()
 
 add_subdirectory(bus_test)
 add_subdirectory(chr_test)
+add_subdirectory(magicon)

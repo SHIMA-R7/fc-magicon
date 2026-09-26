@@ -24,12 +24,15 @@ INCLUDE = [
     "kicad/FC-MAGICON.net", "kicad/FC-MAGICON.pdf", "kicad/FC-MAGICON.pretty/*",
     "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
     "firmware/README.md", "firmware/CMakeLists.txt", "firmware/build.ps1", "firmware/boards/*.h",
-    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/tools/*.py", "firmware/out/*.uf2",
+    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/magicon/*", "firmware/load_rom.ps1",
+    "firmware/tools/*.py", "firmware/out/*.uf2",
+    "firmware/sim/*.c", "firmware/sim/*.h", "firmware/sim/*.py", "firmware/sim/*.ps1", "firmware/sim/agnes/*",
     "3d/*.py", "3d/*.step", "kicad/3d/*.step",
     "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",
 ]
 # case/inspect/ はシェル(printables 860420)の断面図なので上げない。シェルの STEP 自体もリポジトリに無い
-EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*", "kicad/_step_tmp*"]
+EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*", "kicad/_step_tmp*",
+           "firmware/sim/agnes_magicon.c"]   # patch_agnes.py が作るもの
 
 
 def api(path, method="GET", body=None, repo_path=True):
@@ -64,3 +67,4 @@ commit = api("git/commits", "POST", {"message": MESSAGE + "\n\nCo-Authored-By: C
                                      "tree": new_tree, "parents": [head]})["sha"]
 api("git/refs/heads/main", "PATCH", {"sha": commit})
 print("pushed", commit, len(files), "files")
+
