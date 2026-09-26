@@ -1,0 +1,30 @@
+﻿部品,数,記号,フットプリント,メモ
+10µF 電解,1,C1,CP_Radial_D5.0mm_P2.00mm,16V以上、φ5 ピッチ2mm
+100nF セラミック,1,C2,C_Disc_D3.0mm_W1.6mm_P2.50mm,U2 のパスコン
+10nF セラミック,1,C3,C_Disc_D3.0mm_W1.6mm_P2.50mm,PWM の RC フィルタ
+10µF 電解,1,C4,CP_Radial_D5.0mm_P2.00mm,φ5 ピッチ2mm。+側=SOUND_OUT(四角パッド)。ライン出力の直流カット。1µFフィルムでも可
+1N4001〜1N4007(ショットキー 1A があればそちら),1,D1,D_DO-41_SOD81_P7.62mm_Horizontal,本体5V→モジュール。USB給電時の逆流防止。省略不可
+PJ-324M,1,J2,PJ-324M,3.5mm ステレオジャック(SHVC-SOUND-ESP32 と同じ)
+ピンヘッダー 1x3,1,J3,PinHeader_1x03_P2.54mm_Vertical,SWD(debugprobe の Pico 用)
+ピンヘッダー or ピンソケット 2x30,1,J4,PinHeader_2x30_P2.54mm_Vertical,カセット60ピンのブレイクアウト。必要な時だけでもよい
+ピンヘッダー 2x8,1,J5,PinHeader_2x08_P2.54mm_Vertical,デバッグ用(内部信号)
+2SC1815,1,Q1,TO-92_Inline_Wide,TO-92 NPN。足は平らな面から E-C-B。他の小信号NPNでも可(足順に注意)
+0Ω(ジャンパー線でも可),1,R1,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,CIRAM /CE ← /A13
+15kΩ 1/4W,1,R2,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+22kΩ 1/4W,1,R3,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+4.7kΩ 1/4W,1,R4,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+100kΩ 1/4W,1,R5,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+10kΩ(未実装),1,R6,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,本体に /IRQ のプルアップが無い時だけ付ける
+0Ω(ジャンパー線でも可),1,R7,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,音声 45→46番の素通し
+47kΩ,1,R8,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,拡張音源の混ぜる量(実機で調整)
+1kΩ 1/4W,1,R9,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+47kΩ 1/4W,1,R10,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+100Ω 1/4W,1,R11,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
+タクトスイッチ 6mm,1,SW1,SW_PUSH_6mm,BOOTSEL
+タクトスイッチ 6mm,1,SW2,SW_PUSH_6mm,RESET(RP2350のRUN)
+74LVC245 DIP-20,1,U2,DIP-20_W7.62mm,SN74LVC245AN。5V入力を3.3Vへ。74HC/HCT245 では代用不可(5V入力に耐えない)
+Waveshare Core2350B2,1,U1,,RP2350B、2MB PSRAM。付属のFPC-USBアダプターで PC とつなぐ
+ピンソケット 2x8(2.54mm),4,P1-P4,,Core2350B を載せる。モジュール側には 2x8 ピンヘッダー4個
+ピンヘッダー 2x8(2.54mm),4,(モジュール側),,Core2350B の裏に付ける
+ICソケット DIP-20,1,(U2),,任意
+PCB 90x65.8mm 2層 1.2mm,1,,,金メッキ端子(Gold fingers)、差し込み側 45°面取り
