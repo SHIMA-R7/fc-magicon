@@ -16,7 +16,7 @@ $layers = "F.Cu,B.Cu,F.Mask,B.Mask,F.Silkscreen,B.Silkscreen,F.Paste,B.Paste,Edg
 if ($LASTEXITCODE -ne 0) { throw "ガーバーの書き出しに失敗" }
 & $cli pcb export drill --format excellon --excellon-units mm --excellon-separate-th --generate-map --map-format gerberx2 -o "$out\" $pcb | Out-Null
 
-$zip = Join-Path $PSScriptRoot "FC-MAGICON_gerber_r0.1.zip"
+$zip = Join-Path $PSScriptRoot "FC-MAGICON_gerber_r0.2.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$out\*" -DestinationPath $zip
 Get-ChildItem $out | Select-Object Name, Length

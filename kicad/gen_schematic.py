@@ -122,9 +122,9 @@ SYMBOLS = {
 
 # J5 デバッグ用ヘッダー(2x8)。基板の中だけにある信号を出す
 J5_NETS = ["PPU_~{RD}_3V3", "PPU_~{WR}_3V3", "PPU_A13_3V3", "CIRAM_A10_MCU", "EXP_AUDIO_PWM", "EXP_AUDIO_RC",
-           "IRQ_DRV", "FC_5V_SENSE", "+3V3", "VBUS_MOD", "CIRAM_A10", "GND", "Q1_B", "GND", "GND", "GND"]
-# 12・14番は元は LOUT・LINE(ライン出力)。J6(USB ランド)を足した時に2層で引けなくなったので GND にした。
-# ライン出力は J2 や R10・R11 の足で測れる
+           "IRQ_DRV", "FC_5V_SENSE", "+3V3", "VBUS_MOD", "CIRAM_A10", "GND", "GND", "GND", "GND", "GND"]
+# 12・13・14番は元は LOUT・Q1_B・LINE。J6(USB ランド)を足し配線を太くした時に2層で引けなくなったので GND にした。
+# これらは J2・R10・R11・Q1 の足で測れる
 
 
 def ic_geometry(spec):

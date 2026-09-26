@@ -8,6 +8,7 @@ PJ-324M,1,J2,PJ-324M,3.5mm ステレオジャック(SHVC-SOUND-ESP32 と同じ)
 ピンヘッダー 1x3,1,J3,PinHeader_1x03_P2.54mm_Vertical,SWD(debugprobe の Pico 用)
 ピンヘッダー or ピンソケット 2x30,1,J4,PinHeader_2x30_P2.54mm_Vertical,カセット60ピンのブレイクアウト。必要な時だけでもよい
 ピンヘッダー 2x8,1,J5,PinHeader_2x08_P2.54mm_Vertical,デバッグ用(内部信号)
+ピンヘッダー 1x4(任意),1,J6,PinHeader_1x04_P2.54mm_Vertical,USB の予備ランド(5V/D-/D+/GND)。FPC 側と同時に機器をつながない
 2SC1815,1,Q1,TO-92_Inline_Wide,TO-92 NPN。足は平らな面から E-C-B。他の小信号NPNでも可(足順に注意)
 0Ω(ジャンパー線でも可),1,R1,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,CIRAM /CE ← /A13
 15kΩ 1/4W,1,R2,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
@@ -16,13 +17,14 @@ PJ-324M,1,J2,PJ-324M,3.5mm ステレオジャック(SHVC-SOUND-ESP32 と同じ)
 100kΩ 1/4W,1,R5,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 10kΩ(未実装),1,R6,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,本体に /IRQ のプルアップが無い時だけ付ける
 0Ω(ジャンパー線でも可),1,R7,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,音声 45→46番の素通し
-47kΩ,1,R8,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,拡張音源の混ぜる量(実機で調整)
+47kΩ,1,R8,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,拡張音源を46番に混ぜる抵抗(VR1 の中点から)
 1kΩ 1/4W,1,R9,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 47kΩ 1/4W,1,R10,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 100Ω 1/4W,1,R11,R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,
 タクトスイッチ 6mm,1,SW1,SW_PUSH_6mm,BOOTSEL
 タクトスイッチ 6mm,1,SW2,SW_PUSH_6mm,RESET(RP2350のRUN)
 74LVC245 DIP-20,1,U2,DIP-20_W7.62mm,SN74LVC245AN。5V入力を3.3Vへ。74HC/HCT245 では代用不可(5V入力に耐えない)
+半固定抵抗 100kΩ KOA KVSF637AC104,1,VR1,KOA_SF6_637A,拡張音源の音量。上面調整、足 ①③ 5.0mm・② は 5.0mm 上
 Waveshare Core2350B2,1,U1,,RP2350B、2MB PSRAM。付属のFPC-USBアダプターで PC とつなぐ
 ピンソケット 2x8(2.54mm),4,P1-P4,,Core2350B を載せる。モジュール側には 2x8 ピンヘッダー4個
 ピンヘッダー 2x8(2.54mm),4,(モジュール側),,Core2350B の裏に付ける

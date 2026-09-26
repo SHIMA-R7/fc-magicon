@@ -119,15 +119,15 @@
 | P2-1 | GND | GND | GND(全部品共通) |
 | P2-5 | BOOTSEL | BOOTSEL | SW1.1 |
 | P2-6 | SWD | SWD | J3.3 |
-| P2-7 | USBD_N | (未接続) | — |
+| P2-7 | USBD_N | USBD_N | J6.2 |
 | P2-8 | GND | GND | GND(全部品共通) |
-| P2-9 | USBD_P | (未接続) | — |
+| P2-9 | USBD_P | USBD_P | J6.3 |
 | P2-10 | SWCLK | SWCLK | J3.1 |
 | P2-11 | RUN | RUN | SW2.1 |
 | P2-12 | ADC_VREF | (未接続) | — |
 | P2-13 | 3V3_EN | (未接続) | — |
 | P2-14 | GND | GND | GND(全部品共通) |
-| P2-15 | VBUS | VBUS_MOD | C1.1, D1.1 |
+| P2-15 | VBUS | VBUS_MOD | C1.1, D1.1, J6.1 |
 | P2-16 | 3V3 | +3V3 | C2.1, U2.1, U2.20 |
 | P3-1 | GND | GND | GND(全部品共通) |
 | P4-1 | GND | GND | GND(全部品共通) |
@@ -178,15 +178,15 @@
 | 3 | PPU_A13_3V3 | P4-13(GPIO42), U2.16 |
 | 4 | CIRAM_A10_MCU | JP1.1, P4-16(GPIO43) |
 | 5 | EXP_AUDIO_PWM | P4-15(GPIO44), R9.1 |
-| 6 | EXP_AUDIO_RC | C3.1, R8.1, R9.2 |
+| 6 | EXP_AUDIO_RC | C3.1, R9.2, VR1.1 |
 | 7 | IRQ_DRV | P2-2(GPIO45), R4.1 |
 | 8 | FC_5V_SENSE | P2-4(GPIO46), R2.2, R3.1 |
 | 9 | +3V3 | C2.1, P2-16(3V3), U2.1, U2.20 |
-| 10 | VBUS_MOD | C1.1, D1.1, P2-15(VBUS) |
+| 10 | VBUS_MOD | C1.1, D1.1, J6.1, P2-15(VBUS) |
 | 11 | CIRAM_A10 | J1.18, JP1.2, JP2.2, JP3.2 |
-| 12 | LOUT | C4.2, R10.1, R11.1 |
-| 13 | Q1_B | Q1.3, R4.2, R5.1 |
-| 14 | LINE | J2.2, J2.4, R11.2 |
+| 12 | GND | GND(全部品共通) |
+| 13 | GND | GND(全部品共通) |
+| 14 | GND | GND(全部品共通) |
 | 15 | GND | GND(全部品共通) |
 | 16 | GND | GND(全部品共通) |
 
@@ -241,14 +241,14 @@
 | R6-2 | /IRQ |
 | R7-1 | SOUND_IN |
 | R7-2 | SOUND_OUT |
-| R8-1 | EXP_AUDIO_RC |
+| R8-1 | EXP_AUDIO_VR |
 | R8-2 | SOUND_OUT |
 | R9-1 | EXP_AUDIO_PWM |
 | R9-2 | EXP_AUDIO_RC |
 | R10-1 | LOUT |
 | R10-2 | GND |
-| R11-1 | LOUT |
-| R11-2 | LINE |
+| R11-1 | LINE |
+| R11-2 | LOUT |
 | JP1-1 | CIRAM_A10_MCU |
 | JP1-2 | CIRAM_A10 |
 | JP2-1 | PPU_A10 |

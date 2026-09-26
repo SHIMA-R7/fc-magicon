@@ -1,6 +1,8 @@
-# FC-MAGICON ハードウェア仕様書 rev0.1
+# FC-MAGICON ハードウェア仕様書 rev0.2
 
-作成 2026-09-26。基板 rev0.1(ガーバー `FC-MAGICON_gerber_r0.1.zip`)の時点の仕様。未発注・未実装。
+作成 2026-09-26。基板 rev0.2(ガーバー `FC-MAGICON_gerber_r0.2.zip`)の時点の仕様。未発注・未実装。
+
+rev0.1 からの変更: USB の予備ランド J6 を追加、拡張音源の音量用に半固定抵抗 VR1(KOA KVSF637AC104)を追加、電源・音声の配線を太くした、J5 の 12〜14番を GND に変更。
 
 ## 1. 概要
 
@@ -23,8 +25,8 @@ PC とは Core2350B の USB(付属の FPC-USB アダプター)でつなぐ。
 | /IRQ | GPIO45 → R4 → Q1 → /IRQ(15番) |
 | 電源 | 本体 +5V(30・31番)→ D1 → Core2350B の VBUS → モジュール内 LDO → 3.3V → U2 |
 | 本体 5V 検出 | +5V → R2/R3 分圧 → GPIO46 |
-| 音声 | 45番 → R7(0Ω)→ 46番。GPIO44 の PWM → R9/C3 → R8 → 46番。46番 → C4 → R10/R11 → J2(3.5mm ライン出力) |
-| PC | Core2350B の USB(付属の FPC-USB アダプター) |
+| 音声 | 45番 → R7(0Ω)→ 46番。GPIO44 の PWM → R9/C3 → VR1(音量)→ R8 → 46番。46番 → C4 → R10/R11 → J2(3.5mm ライン出力) |
+| PC | Core2350B の USB(付属の FPC-USB アダプター)。同じ D+/D- を J6(予備ランド)にも出している |
 | テスト | J4(カセット60ピン全部、端子の真上)、J5(内部信号)、J3(SWD)、TP1〜TP5 |
 
 ## 3. 主要部品
@@ -37,6 +39,7 @@ PC とは Core2350B の USB(付属の FPC-USB アダプター)でつなぐ。
 | D1 | 1N4001〜1N4007(ショットキー 1A 推奨) | 本体 5V → モジュールの VBUS。USB 給電時の本体への逆流を防ぐ |
 | J1 | 基板エッジ(金メッキ端子 60本) | ファミコンのカセットスロット |
 | J2 | PJ-324M | 3.5mm ライン出力(モノラルを L/R 両方へ) |
+| VR1 | KOA KVSF637AC104(100kΩ、上面調整) | 拡張音源の音量。足は ①③ が 5.0mm 間隔、② がその中央の 5.0mm 上(データシートの推奨取付穴、φ1.2) |
 
 ## 4. 電源
 
@@ -129,7 +132,7 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | 部分 | 回路 | 値 |
 |---|---|---|
 | 素通し | 45番(本体からの音声)→ R7 0Ω → 46番(本体へ戻す) | 市販カセットと同じ |
-| 拡張音源 | GPIO44 PWM → R9 1kΩ → EXP_AUDIO_RC(C3 10nF で GND)→ R8 47kΩ → 46番 | RC の遮断周波数 約 15.9kHz。R8 で混ぜる量を決める(実機で調整) |
+| 拡張音源 | GPIO44 PWM → R9 1kΩ → EXP_AUDIO_RC(C3 10nF で GND)→ VR1 100kΩ(①=RC、③=GND、②=中点)→ R8 47kΩ → 46番 | RC の遮断周波数 約 15.9kHz。VR1 で音量 0〜最大。どこに回しても本体の音声ラインには 47kΩ 以上が付く |
 | ライン出力 | 46番 → C4 10µF(+ 側が 46番)→ LOUT(R10 47kΩ で GND)→ R11 100Ω → J2 | 低域の遮断 約 0.34Hz。J2 は L/R に同じ信号 |
 
 ### 7.5 操作
@@ -145,7 +148,8 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 |---|---|
 | J3 | SWD(1=SWCLK、2=GND、3=SWDIO)。debugprobe の Pico をつなぐ |
 | J4 | カセット60ピン全部(2x30、2.54mm)。差し込み部のすぐ上で、各列が真下の端子と同じ信号。本体に入る高さなのでランドとして使う想定 |
-| J5 | 内部信号(2x8、2.54mm)。上辺 |
+| J5 | 内部信号(2x8、2.54mm)。上辺。12〜14番は GND(元の LOUT・Q1_B・LINE は2層に収めるために外した。J2・R10・R11・Q1 の足で測れる) |
+| J6 | USB の予備ランド(1x4、2.54mm、1=5V(VBUS)、2=D-、3=D+、4=GND)。モジュールの FPC と同じ USB 信号。**FPC 側と同時に機器をつながない**。VBUS は本体給電時 D1 の後の約 4.3V |
 | TP1〜TP5 | /RD、PPU D0、M2、/ROMSEL、GND。オシロのプローブ用(穴 0.7mm) |
 
 ## 9. 機械仕様
@@ -169,7 +173,7 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | 項目 | 値 |
 |---|---|
 | 層数 | 2(F.Cu / B.Cu)。GND ベタを両面に、GND スティッチングビアあり |
-| 配線幅 | 信号 0.25mm(IC の足の間で最小 0.15mm)。+5V 0.5mm、VBUS_MOD・GND 0.4mm、+3V3 0.3mm |
+| 配線幅 | 信号 0.25mm(IC の足の間で最小 0.15mm)。+5V 0.8mm(端子31番から J4 への枝だけ 0.5mm)、VBUS_MOD 0.6mm、GND 0.5mm、+3V3 0.4mm、音声 0.4mm |
 | クリアランス | 0.2mm |
 | ビア | 径 0.6mm / 穴 0.3mm |
 | 端子部 | 端子の隙間・両脇・先端は配線・ビア・ベタ禁止。配線はパッドの上端から入る |
@@ -197,7 +201,8 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | Core2350B のピン配置 | 照合シートで実物のシルクと全ピン一致を確認 |
 | /RD → データの応答時間 | **未検証**(基板で TP1・TP2 を測る) |
 | CIRAM A10 を 3.3V で駆動 | **未検証**(駄目なら JP2/JP3) |
-| 拡張音源の混ぜる量(R8) | 実機で調整 |
+| 拡張音源の音量 | VR1 で調整 |
+| VR1 の足の配置 | データシート(KOA SF6、637A の推奨取付穴)どおり。実物が届いたら穴に合うか確認 |
 
 ## 13. 部品表
 
@@ -212,6 +217,7 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | ピンヘッダー 1x3 | 1 | J3 | PinHeader_1x03_P2.54mm_Vertical | SWD(debugprobe の Pico 用) |
 | ピンヘッダー or ピンソケット 2x30 | 1 | J4 | PinHeader_2x30_P2.54mm_Vertical | カセット60ピンのブレイクアウト。必要な時だけでもよい |
 | ピンヘッダー 2x8 | 1 | J5 | PinHeader_2x08_P2.54mm_Vertical | デバッグ用(内部信号) |
+| ピンヘッダー 1x4(任意) | 1 | J6 | PinHeader_1x04_P2.54mm_Vertical | USB の予備ランド(5V/D-/D+/GND)。FPC 側と同時に機器をつながない |
 | 2SC1815 | 1 | Q1 | TO-92_Inline_Wide | TO-92 NPN。足は平らな面から E-C-B。他の小信号NPNでも可(足順に注意) |
 | 0Ω(ジャンパー線でも可) | 1 | R1 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal | CIRAM /CE ← /A13 |
 | 15kΩ 1/4W | 1 | R2 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal |  |
@@ -220,13 +226,14 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | 100kΩ 1/4W | 1 | R5 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal |  |
 | 10kΩ(未実装) | 1 | R6 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal | 本体に /IRQ のプルアップが無い時だけ付ける |
 | 0Ω(ジャンパー線でも可) | 1 | R7 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal | 音声 45→46番の素通し |
-| 47kΩ | 1 | R8 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal | 拡張音源の混ぜる量(実機で調整) |
+| 47kΩ | 1 | R8 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal | 拡張音源を46番に混ぜる抵抗(VR1 の中点から) |
 | 1kΩ 1/4W | 1 | R9 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal |  |
 | 47kΩ 1/4W | 1 | R10 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal |  |
 | 100Ω 1/4W | 1 | R11 | R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal |  |
 | タクトスイッチ 6mm | 1 | SW1 | SW_PUSH_6mm | BOOTSEL |
 | タクトスイッチ 6mm | 1 | SW2 | SW_PUSH_6mm | RESET(RP2350のRUN) |
 | 74LVC245 DIP-20 | 1 | U2 | DIP-20_W7.62mm | SN74LVC245AN。5V入力を3.3Vへ。74HC/HCT245 では代用不可(5V入力に耐えない) |
+| 半固定抵抗 100kΩ KOA KVSF637AC104 | 1 | VR1 | KOA_SF6_637A | 拡張音源の音量。上面調整、足 ①③ 5.0mm・② は 5.0mm 上 |
 | Waveshare Core2350B2 | 1 | U1 |  | RP2350B、2MB PSRAM。付属のFPC-USBアダプターで PC とつなぐ |
 | ピンソケット 2x8(2.54mm) | 4 | P1-P4 |  | Core2350B を載せる。モジュール側には 2x8 ピンヘッダー4個 |
 | ピンヘッダー 2x8(2.54mm) | 4 | (モジュール側) |  | Core2350B の裏に付ける |
@@ -356,15 +363,15 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | P2-1 | GND | GND | GND(全部品共通) |
 | P2-5 | BOOTSEL | BOOTSEL | SW1.1 |
 | P2-6 | SWD | SWD | J3.3 |
-| P2-7 | USBD_N | (未接続) | — |
+| P2-7 | USBD_N | USBD_N | J6.2 |
 | P2-8 | GND | GND | GND(全部品共通) |
-| P2-9 | USBD_P | (未接続) | — |
+| P2-9 | USBD_P | USBD_P | J6.3 |
 | P2-10 | SWCLK | SWCLK | J3.1 |
 | P2-11 | RUN | RUN | SW2.1 |
 | P2-12 | ADC_VREF | (未接続) | — |
 | P2-13 | 3V3_EN | (未接続) | — |
 | P2-14 | GND | GND | GND(全部品共通) |
-| P2-15 | VBUS | VBUS_MOD | C1.1, D1.1 |
+| P2-15 | VBUS | VBUS_MOD | C1.1, D1.1, J6.1 |
 | P2-16 | 3V3 | +3V3 | C2.1, U2.1, U2.20 |
 | P3-1 | GND | GND | GND(全部品共通) |
 | P4-1 | GND | GND | GND(全部品共通) |
@@ -415,15 +422,15 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | 3 | PPU_A13_3V3 | P4-13(GPIO42), U2.16 |
 | 4 | CIRAM_A10_MCU | JP1.1, P4-16(GPIO43) |
 | 5 | EXP_AUDIO_PWM | P4-15(GPIO44), R9.1 |
-| 6 | EXP_AUDIO_RC | C3.1, R8.1, R9.2 |
+| 6 | EXP_AUDIO_RC | C3.1, R9.2, VR1.1 |
 | 7 | IRQ_DRV | P2-2(GPIO45), R4.1 |
 | 8 | FC_5V_SENSE | P2-4(GPIO46), R2.2, R3.1 |
 | 9 | +3V3 | C2.1, P2-16(3V3), U2.1, U2.20 |
-| 10 | VBUS_MOD | C1.1, D1.1, P2-15(VBUS) |
+| 10 | VBUS_MOD | C1.1, D1.1, J6.1, P2-15(VBUS) |
 | 11 | CIRAM_A10 | J1.18, JP1.2, JP2.2, JP3.2 |
-| 12 | LOUT | C4.2, R10.1, R11.1 |
-| 13 | Q1_B | Q1.3, R4.2, R5.1 |
-| 14 | LINE | J2.2, J2.4, R11.2 |
+| 12 | GND | GND(全部品共通) |
+| 13 | GND | GND(全部品共通) |
+| 14 | GND | GND(全部品共通) |
 | 15 | GND | GND(全部品共通) |
 | 16 | GND | GND(全部品共通) |
 
@@ -478,14 +485,14 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | R6-2 | /IRQ |
 | R7-1 | SOUND_IN |
 | R7-2 | SOUND_OUT |
-| R8-1 | EXP_AUDIO_RC |
+| R8-1 | EXP_AUDIO_VR |
 | R8-2 | SOUND_OUT |
 | R9-1 | EXP_AUDIO_PWM |
 | R9-2 | EXP_AUDIO_RC |
 | R10-1 | LOUT |
 | R10-2 | GND |
-| R11-1 | LOUT |
-| R11-2 | LINE |
+| R11-1 | LINE |
+| R11-2 | LOUT |
 | JP1-1 | CIRAM_A10_MCU |
 | JP1-2 | CIRAM_A10 |
 | JP2-1 | PPU_A10 |
@@ -519,7 +526,9 @@ GPIO43 は 3.3V 出力。本体の VRAM が 3.3V を H と認識するかは実�
 | kicad/gen_footprints.py | カセット端子のフットプリントを生成 |
 | kicad/build_pcb.py | 部品配置(place)、配線の取り込みとベタ(import)、一部の配線やり直し(reroute) |
 | kicad/route.py | Freerouting で自動配線 |
-| kicad/export_gerbers.ps1 | DRC を確認してガーバーと zip を出力 |
+| kicad/add_part.py / sync_nets.py / hand_route.py | 配線済みの基板に部品を足す / パッドのネットを回路図に合わせる / 1本だけ手で引く |
+| kicad/export_gerbers.ps1 | DRC を確認してガーバーと zip(FC-MAGICON_gerber_r0.2.zip)を出力 |
+| images/board_front.png ほか | 基板の3D画像(正面・背面・斜め、kicad-cli pcb render) |
 | kicad/bom.py / print_bom.ps1 | 部品表の作成と印刷 |
 | kicad/print_fit_check.ps1 | 実寸の現物合わせシートを印刷 |
 | kicad/gen_spec_tables.py / docs/build_spec.py | この仕様書を作る |

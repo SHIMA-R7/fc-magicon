@@ -320,7 +320,7 @@ def place():
         lay_down(board.FindFootprintByReference(ref), length, width, polar)
 
     # シルク
-    text(board, "FC-MAGICON rev0.1", W / 2, 40.5, 1.2)
+    text(board, "FC-MAGICON rev0.2", W / 2, 40.5, 1.2)
     text(board, "Core2350B", MOD_X + 12.7, MOD_Y + 16.0, 1.0, top=False)
     text(board, "FPC", MOD_X + 17.5, MOD_Y + 10.0, 0.8, top=False)
     # J4 ブレイクアウトの列番号(上の列 = カセット 31〜60番、下の列 = 1〜30番)

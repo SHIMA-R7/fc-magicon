@@ -22,6 +22,7 @@ INCLUDE = [
     "kicad/*.py", "kicad/*.ps1", "kicad/bom.csv", "kicad/fp-lib-table", "kicad/sym-lib-table",
     "kicad/FC-MAGICON.kicad_pro", "kicad/FC-MAGICON.kicad_sch", "kicad/FC-MAGICON.kicad_sym", "kicad/FC-MAGICON.kicad_pcb",
     "kicad/FC-MAGICON.net", "kicad/FC-MAGICON.pdf", "kicad/FC-MAGICON.pretty/*",
+    "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
 ]
 EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*"]
 

@@ -10,8 +10,8 @@ import build_pcb as B
 
 CLEAR = 0.2
 ROUTES = [
-    # LINE: R11 の1番(基板の左端側)から左端に沿って上がり、J2 の下を通って J2 の4番へ
-    ("/LINE", "B.Cu", 0.25, [(2.0, 33.8), (0.75, 32.55), (0.75, 19.4), (12.2, 19.4), (13.3, 18.3), (13.3, 16.35)]),
+    # +5V: 端子31番(裏、左端)を、真上の GND ビアの左脇から上へ抜いて、既存の +5V の線(J4 2番 → 左下へ)に合流させる
+    ("/+5V", "B.Cu", 0.5, [(6.65, 58.4), (6.65, 48.08)]),
 ]
 
 
@@ -38,7 +38,7 @@ board = pcbnew.LoadBoard(B.PCB)
 obstacles = []   # (層名 or "*", 線分の端2つ, 半径)
 for t in board.GetTracks():
     net = t.GetNetname()
-    if t.GetClass() == "PCB_VIA":
+    if t.GetClass() == "PCB_VIA":         # ビアの太さは層を指定して読む(指定しないと KiCad が警告ダイアログで止まる)
         c = (mm(t.GetPosition().x) - B.OX, mm(t.GetPosition().y) - B.OY)
         obstacles.append(("*", net, c, c, mm(t.GetWidth(pcbnew.F_Cu)) / 2))
     else:

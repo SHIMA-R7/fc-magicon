@@ -8,10 +8,17 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 
 ## 現状(2026-09-26)
 
-- **基板 rev0.2 を設計中。未発注・未実装、ファームウェアは未着手。**
-- rev0.1 から、USB の予備ランド(J6)、拡張音源の音量用の半固定抵抗(VR1)を追加し、電源・音声の配線を太くした。
-  `kicad/FC-MAGICON.kicad_pcb` は部品配置まで(配線は作り直し中)。ガーバーは配線と DRC が済んでから出す。
-- 仕様書: [`docs/hardware_spec.pdf`](docs/hardware_spec.pdf)(rev0.1 時点。rev0.2 の変更は反映前)
+- **基板 rev0.2 の設計が完了(2層、DRC エラー0・未接続0)。未発注・未実装、ファームウェアは未着手。**
+- rev0.1 からの変更: USB の予備ランド(J6)、拡張音源の音量用の半固定抵抗 VR1(KOA KVSF637AC104)を追加、
+  電源・音声の配線を太くした(+5V 0.8mm、VBUS 0.6mm、GND 0.5mm、+3V3 0.4mm、音声 0.4mm)、J5 の 12〜14番を GND に。
+- ガーバー: [`kicad/FC-MAGICON_gerber_r0.2.zip`](kicad/FC-MAGICON_gerber_r0.2.zip)(発注の指定は下の「基板の発注」)
+- 仕様書: [`docs/hardware_spec.pdf`](docs/hardware_spec.pdf)(rev0.2)
+
+| 正面(部品面、本体の手前) | 背面 |
+|---|---|
+| ![front](images/board_front.png) | ![back](images/board_back.png) |
+
+![oblique](images/board_oblique.png)
 
 ## ファイル
 
