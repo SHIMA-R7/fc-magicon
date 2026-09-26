@@ -34,6 +34,10 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 | `kicad/bom.py`, `print_bom.ps1` | 部品表(`bom.csv`)の作成と印刷 |
 | `kicad/print_core2350b_pinmap.ps1`, `print_fit_check.ps1` | Core2350B のピン照合シート、実寸の現物合わせシートの印刷 |
 | `kicad/check_nets.py`, `drc_summary.py` | 回路図の簡易チェック、DRC レポートの集計 |
+| `3d/` | 基板の STEP(`FC-MAGICON_r0.2_parts.step` 部品あり / `_board.step` 基板だけ)。`make_models.py` → `export_step.py`(KiCad の Python)で作り直す。原点は基板の左上、Y は上向き(基板は Y 0〜-65.8) |
+| `kicad/print_part_guide.ps1` | 部品案内図(表・裏、原寸)の印刷 |
+| `case/label/` | カセット表面のシール(`make_label.py` → `label.png`、`print_label.ps1` で A4 に印刷)。99 x 60.6mm、ケースの穴(J3/J5/J6/VR1/SW/Core2350B2)は原寸 |
+| `case/*.py` | ケースの元データ(下記)の寸法を調べたスクリプトと、基板の部品の占有範囲(`parts.json`) |
 | `docs/` | ハードウェア仕様書(`build_spec.py` と `kicad/gen_spec_tables.py` で作る) |
 
 KiCad 10、Freerouting 2.4.1 を使用。KiCad の Python(pcbnew)で実行するスクリプトと、ふつうの Python で実行するスクリプトがある(各ファイルの先頭に記載)。
@@ -133,6 +137,13 @@ TP1〜TP5(/RD、D0、M2、/ROMSEL、GND)はオシロのプローブ用。
 - 市販カセットは 1〜30番がラベル面(本体の手前)。この基板は部品面(F.Cu)を手前に向けたので、F.Cu = 1〜30番、B.Cu = 31〜60番。
 - ピン配置は fc-rom-vomitter の表とも一致した(30/31=+5V、1/16=GND、45=本体からの音声、46=本体へ戻す音声、48/49=/A13)。
 - ファイルをそのまま流用する場合は、元のライセンスに従うこと。寸法(事実)を参照して自作するならその限りではない。
+
+## ケース(3Dプリント)の元データ
+
+[printables 860420「Nintendo Famicom Cartridge Shell」](https://www.printables.com/model/860420-nintendo-famicom-cartridge-shell)(CC BY 4.0)。
+これは [masible/famicom-everdrive-n8-shell-with-usb](https://github.com/masible/famicom-everdrive-n8-shell-with-usb)(hadessuk、CC BY)を
+標準の基板向けにしたリミックスで、さらに元は Blackchamber の [Thingiverse 117607](https://www.thingiverse.com/thing:117607/)(CC BY)。
+改変版を公開するときは、この3つの作者の表記を残す。
 
 ## 注意
 

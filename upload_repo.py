@@ -25,8 +25,11 @@ INCLUDE = [
     "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
     "firmware/README.md", "firmware/CMakeLists.txt", "firmware/build.ps1", "firmware/boards/*.h",
     "firmware/bus_test/*", "firmware/chr_test/*", "firmware/tools/*.py", "firmware/out/*.uf2",
+    "3d/*.py", "3d/*.step", "kicad/3d/*.step",
+    "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",
 ]
-EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*"]
+# case/inspect/ はシェル(printables 860420)の断面図なので上げない。シェルの STEP 自体もリポジトリに無い
+EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*", "kicad/_step_tmp*"]
 
 
 def api(path, method="GET", body=None, repo_path=True):
