@@ -244,11 +244,13 @@ def main():
             view.mode = vm
             t0 = time.perf_counter()
             tg = 0.0
+            pv = None
             for _ in range(a.dry_run):
                 t1 = time.perf_counter()
                 img, cur = view.grab()
                 tg += time.perf_counter() - t1
-                frame_packet(encode(img, mode), cur)
+                pv = encode(img, mode, prev=pv if mode == "color" else None, iters=2 if pv else 4)
+                frame_packet(pv, cur)
             dt = (time.perf_counter() - t0) / a.dry_run
             print(f"{vm:4} {mode}: 1 枚 {dt * 1000:.1f}ms(取り込み {tg / a.dry_run * 1000:.1f}ms)= 最大 {1 / dt:.1f} fps")
         return
@@ -263,6 +265,7 @@ def main():
     speed = 0.0
     sent, t_start, next_t = 0, time.perf_counter(), 0.0
     last_io = time.perf_counter()
+    prev = None
 
     def release_all():
         """押しっぱなしのキーとマウスのボタンを離す(入力が途切れた時・止める時)"""
@@ -335,7 +338,8 @@ def main():
             if now >= next_t:
                 next_t = now + 1 / a.fps
                 img, cur = view.grab()
-                port.write(frame_packet(encode(img, mode), cur))   # カセットが前の 1 枚を出すまで、ここで待たされる
+                prev = encode(img, mode, prev=prev if mode == "color" else None, iters=2 if prev else 4)   # 組は前の画面から探す(チラつき防止)
+                port.write(frame_packet(prev, cur))   # カセットが前の 1 枚を出すまで、ここで待たされる
                 sent += 1
                 if sent % 100 == 0:
                     print(f"{sent} 枚、{sent / (time.perf_counter() - t_start):.1f} fps")
