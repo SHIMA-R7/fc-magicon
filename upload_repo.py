@@ -28,7 +28,7 @@ INCLUDE = [
     "firmware/tools/*.py", "firmware/out/*.uf2",
     "firmware/sim/*.c", "firmware/sim/*.h", "firmware/sim/*.py", "firmware/sim/*.ps1", "firmware/sim/agnes/*",
     "3d/*.py", "3d/*.step", "kicad/3d/*.step",
-    "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",
+    "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",   # label_print.png(印刷用、大きい)は作り直せるので上げない
 ]
 # case/inspect/ はシェル(printables 860420)の断面図なので上げない。シェルの STEP 自体もリポジトリに無い
 EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*", "kicad/_step_tmp*",

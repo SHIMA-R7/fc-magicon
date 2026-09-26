@@ -5,15 +5,23 @@
   ・穴のまわりに、何の部品で何をするかを書く。
   ・J4 のあたりにロゴ(../../images/logo.png、黒い背景は切り落とす)。
   部品の位置は ../parts.json(dump_parts.py の出力、基板の左上が原点、y は下向き)。
-  -> label.png(20px/mm)。印刷は print_label.ps1
+  -> label.png(20px/mm、確認用)。印刷は print_label.ps1(--px 48 の label_print.png を使う)
+    python make_label.py --px 48 --out label_print.png     (印刷用、約 1200dpi)
+  絵(枠・文字・ロゴ)は SCALE 倍の大きさで直接描く(描いてから拡大するとぼやけるため)。穴だけ原寸。
+  ロゴは元画像を目標の大きさへ縮めてから、4 色(黒・白・青・水色)に寄せ直して縁のにじみを消す。
 """
+import argparse
 import json
 import os
 
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PX = 20                       # 1mm あたりのピクセル
+ap = argparse.ArgumentParser()
+ap.add_argument("--px", type=float, default=20)            # 1mm あたりのピクセル
+ap.add_argument("--out", default="label.png")
+ARGS = ap.parse_args()
+PX = ARGS.px
 W, H = 90.0, 55.1             # シール = 基板の本体部分(差し込み部はスカートの中なので除く)
 HOLE_M = 0.5                  # 穴は部品の枠より 0.5mm 大きく
 SCALE = 1.1                   # シール(枠・文字・ロゴ)の倍率。穴は原寸のまま(2026-09-26 ユーザー指定)
@@ -31,7 +39,14 @@ FM = r"C:\Windows\Fonts\consolab.ttf"
 parts = {p["ref"]: p for p in json.load(open(os.path.join(HERE, "..", "parts.json"), encoding="utf-8"))}
 
 
-def mm(v):
+K = PX * 1.1                  # 絵を描く時の 1mm あたりのピクセル(= PX * SCALE、下で SCALE に合わせ直す)
+
+
+def mm(v):                    # 絵の座標(基板の mm を SCALE 倍した所)
+    return int(round(v * K))
+
+
+def mmh(v):                   # 穴の座標(原寸の mm)
     return int(round(v * PX))
 
 
@@ -39,7 +54,8 @@ def font(path, size_mm):
     return ImageFont.truetype(path, mm(size_mm))
 
 
-img = Image.new("RGB", (mm(W), mm(H)), BG)
+K = PX * SCALE
+img = Image.new("RGB", (mmh(W * SCALE), mmh(H * SCALE)), BG)
 d = ImageDraw.Draw(img)
 
 # 外周の青い二重線(ロゴの枠に合わせる)
@@ -64,14 +80,14 @@ def draw_holes(dr, ox, oy):
         if ref in ("SW1", "SW2"):
             continue
         x0, x1, y0, y1 = x0 + ox, x1 + ox, y0 + oy, y1 + oy
-        dr.rounded_rectangle([mm(x0), mm(y0), mm(x1), mm(y1)], radius=mm(0.6), fill=WHITE)
+        dr.rounded_rectangle([mmh(x0), mmh(y0), mmh(x1), mmh(y1)], radius=mmh(0.6), fill=WHITE)
         # 切り取り線(細い赤の破線)
         for (ax, ay, bx, by) in ((x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)):
             n = max(1, int(max(abs(bx - ax), abs(by - ay)) / 0.8))
             for k in range(0, n, 2):
                 t0, t1 = k / n, min(1.0, (k + 1) / n)
-                dr.line([mm(ax + (bx - ax) * t0), mm(ay + (by - ay) * t0), mm(ax + (bx - ax) * t1), mm(ay + (by - ay) * t1)],
-                        fill=CUT, width=max(1, mm(0.12)))
+                dr.line([mmh(ax + (bx - ax) * t0), mmh(ay + (by - ay) * t0), mmh(ax + (bx - ax) * t1), mmh(ay + (by - ay) * t1)],
+                        fill=CUT, width=max(1, mmh(0.12)))
 
 
 def text(xy, s, f, fill=WHITE, anchor="la"):
@@ -83,9 +99,9 @@ def tag(xy, name, desc, anchor="l", w_name=None):
     fn, fd = font(FM, 1.9), font(FB, 1.55)
     x, y = xy
     nb = d.textbbox((0, 0), name, font=fn)
-    nw = (nb[2] - nb[0]) / PX + 1.0
+    nw = (nb[2] - nb[0]) / K + 1.0
     lines = desc.split("\n")
-    dw = max((d.textbbox((0, 0), s, font=fd)[2]) / PX for s in lines)
+    dw = max((d.textbbox((0, 0), s, font=fd)[2]) / K for s in lines)
     tw = max(nw, dw)
     if anchor == "r":
         x -= tw
@@ -132,17 +148,27 @@ for yy in range(0, logo.height, 2):
 logo = logo.crop((min(xs) - 4, min(ys) - 4, max(xs) + 5, max(ys) + 5))
 LW = 76.0
 lh = LW * logo.height / logo.width
-logo = logo.resize((mm(LW), mm(lh)), Image.NEAREST)   # ドット絵なので NEAREST
+logo = logo.resize((mm(LW), mm(lh)), Image.LANCZOS)   # 縮めてから 4 色に寄せ直す(縁のにじみを消す)
+# 色の薄い(灰色の)縁は白か黒だけに寄せる(青に寄ると白い文字の縁に水色のふちが出る)。色のある所だけ青・水色へ
+import numpy as np
+a = np.asarray(logo).astype(np.int32)
+PAL4 = np.array([(0, 0, 0), (255, 255, 255), (26, 108, 255), (90, 170, 255)])
+dist = ((a[:, :, None, :] - PAL4[None, None, :, :]) ** 2).sum(-1)
+idx = dist.argmin(-1)
+sat = a.max(-1) - a.min(-1)
+gray = sat < 90
+idx[gray] = np.where(a[gray].mean(-1) > 128, 1, 0)
+logo = Image.fromarray(PAL4[idx].astype(np.uint8))
 ly = 48.9 - lh / 2
 img.paste(logo, (mm((W - LW) / 2), mm(ly)))
 text((W / 2, ly - 1.2), "rev0.2   FAMICOM CARTRIDGE", font(FM, 1.5), GRAY, "md")
 
-# 絵(枠・文字・ロゴ)だけ SCALE 倍にし、穴は原寸のまま、基板の中心 = シールの中心 になる位置に開ける
-img = img.resize((mm(W * SCALE), mm(H * SCALE)), Image.LANCZOS)
+# 穴は原寸のまま、基板の中心 = シールの中心 になる位置に開ける
 OFF_X, OFF_Y = (W * SCALE - W) / 2, (H * SCALE - H) / 2
 draw_holes(ImageDraw.Draw(img), OFF_X, OFF_Y)
-img.save(os.path.join(HERE, "label.png"), dpi=(PX * 25.4, PX * 25.4))
-print("->", os.path.join(HERE, "label.png"), img.size, f"{W * SCALE:.1f} x {H * SCALE:.1f}mm  穴のずらし {OFF_X:.2f}, {OFF_Y:.2f}mm")
+out = os.path.join(HERE, ARGS.out)
+img.save(out, dpi=(PX * 25.4, PX * 25.4))
+print("->", out, img.size, f"{W * SCALE:.1f} x {H * SCALE:.1f}mm  穴のずらし {OFF_X:.2f}, {OFF_Y:.2f}mm")
 
 
 
