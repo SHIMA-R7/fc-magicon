@@ -24,7 +24,7 @@ INCLUDE = [
     "kicad/FC-MAGICON.net", "kicad/FC-MAGICON.pdf", "kicad/FC-MAGICON.pretty/*",
     "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
     "firmware/README.md", "firmware/CMakeLists.txt", "firmware/build.ps1", "firmware/boards/*.h",
-    "firmware/bus_test/*", "firmware/out/*.uf2",
+    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/tools/*.py", "firmware/out/*.uf2",
 ]
 EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*"]
 

@@ -1,0 +1,40 @@
+; FC-MAGICON chr_test: PPU の CHR 読み出しに応答する(GPIO16〜47 の窓で使う)
+;   IN_BASE = GPIO26 とすると、ピン番号(IN_BASE から):
+;     0-7   PPU AD0-AD7(GPIO26-33)  /RD の直前はアドレス下位、その後データ
+;     8-12  PPU A8-A12(GPIO34-38)
+;     14    PPU /RD(GPIO40、U2 経由)   ← JMP_PIN にも設定する
+;     16    PPU A13(GPIO42、U2 経由)
+;
+; アドレス下位はラッチ出力(PPU A0-A7)を使わず、/RD が下がる直前の AD0-7 から読む:
+;   /RD が High の間 AD+A を読み続け、/RD が下がった時点で「最後に読んだ値」を渡す。
+;   ループ 1 周 = 2 命令(250MHz で 8ns)なので、渡す値は /RD が下がる 8ns 以内に読んだもの。
+.program ppu_chr
+.wrap_target
+    wait 1 pin 14           ; /RD = High(アドレスの時間)
+sample:
+    mov x, pins             ; AD0-7・A8-12・A13 を読む
+    jmp pin sample          ; /RD が High のうちは読み続ける
+    mov isr, x              ; /RD が下がった: 直前に読んだ値を渡す
+    push noblock
+    pull block              ; コアの答え(データ8bit + 方向8bit)
+    out pins, 8             ; AD0-7 にデータ
+    out pindirs, 8          ; 0xFF = 出す / 0x00 = 出さない(A13 = 1 のネームテーブルなど)
+    wait 1 pin 14           ; /RD が上がったら
+    mov osr, null
+    out pindirs, 8          ; バスを放す
+.wrap
+
+% c-sdk {
+static inline void ppu_chr_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = ppu_chr_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 26);                  // 絶対番号で書く(SDK が GPIO ベース 16 を差し引く)
+    sm_config_set_jmp_pin(&c, 40);                  // /RD
+    sm_config_set_out_pins(&c, 26, 8);
+    sm_config_set_out_shift(&c, true, false, 32);
+    for (uint i = 26; i < 34; i++)
+        pio_gpio_init(pio, i);
+    pio_sm_set_consecutive_pindirs(pio, sm, 26, 8, false);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

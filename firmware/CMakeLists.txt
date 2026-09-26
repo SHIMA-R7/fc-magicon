@@ -14,3 +14,4 @@ set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
 
 add_subdirectory(bus_test)
+add_subdirectory(chr_test)

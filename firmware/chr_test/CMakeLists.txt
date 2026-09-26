@@ -1,0 +1,7 @@
+add_executable(chr_test main.c)
+pico_generate_pio_header(chr_test ${CMAKE_CURRENT_LIST_DIR}/../bus_test/cpu_bus.pio)
+pico_generate_pio_header(chr_test ${CMAKE_CURRENT_LIST_DIR}/ppu_chr.pio)
+target_link_libraries(chr_test pico_stdlib pico_multicore hardware_pio hardware_clocks)
+pico_enable_stdio_usb(chr_test 1)
+pico_enable_stdio_uart(chr_test 0)
+pico_add_extra_outputs(chr_test)
