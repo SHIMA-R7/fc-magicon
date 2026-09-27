@@ -124,7 +124,11 @@ python tools/remote_pc.py --dry-run 30   # カセット無しで、画面の取�
 |---|---|
 | 1コン 十字キー / A / B | マウス移動(押し続けると速くなる)/ 左クリック / 右クリック |
 | 1コン SELECT / START | 画面全体を縮小 ⇔ カーソルのまわりを等倍 / 等倍の時にカーソルを追うか止めるか |
-| ファミリーベーシックのキーボード | 同じ刻印のキー(JIS 配列の位置)。STOP = Ctrl+C、GRPH = Alt、カナ = 半角/全角、DEL = BackSpace、CLR HOME = Home |
+| ファミリーベーシックのキーボード | 同じ刻印のキー(JIS 配列の位置)。STOP / DEL = BackSpace、カナ = 半角/全角、CLR HOME = Home。SHIFT / GRPH(Alt)/ CTR はトグル(RETURN で SHIFT は戻る) |
+
+キーボードのふるまいは、前に作った拡張端子 ⇔ USB 変換器([SHIMA-R7/Famicom-Expand-USB-Adapter](https://github.com/SHIMA-R7/Famicom-Expand-USB-Adapter)、実機で確かめたもの)に合わせた:
+キーの並び(9 行 x 8)は nesdev と一致、列を選んでから読むまで 500us 待つ(300us は不安定だった)、1 キーずつのチャタリング対策(2 回続けて同じなら確定)、
+トグル式の SHIFT / GRPH / CTR。`tools/test_keyboard_bridge.py` が、キーを実際には送らずにこのふるまいを確かめる。
 
 - 使うのは Python に元からあるものと Pillow・numpy だけ(COM ポート・画面の取り込み・マウスとキーは Windows の API を ctypes で呼ぶ)。
 - 入力が 0.5 秒届かない時(ケーブルが抜けた等)と止めた時は、押しっぱなしのキーとボタンを離す。

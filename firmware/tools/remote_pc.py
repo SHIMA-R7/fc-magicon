@@ -9,7 +9,8 @@ FC-MAGICON 画面転送(リモートデスクトップ)の PC 側。PC の画面
 操作:
   1コン 十字キー = マウス移動(押し続けると速くなる)、A = 左クリック、B = 右クリック
         SELECT = 表示の切り替え(画面全体を縮小 ⇔ カーソルのまわりを等倍)、START = 等倍の時にカーソルを追うか止めるか
-  キーボード = 同じ刻印のキー(JIS 配列の位置で送る)。STOP = Ctrl+C、GRPH = Alt、カナ = 半角/全角、DEL = BackSpace
+  キーボード = 同じ刻印のキー(JIS 配列の位置で送る)。前に作った拡張端子 ⇔ USB 変換器と同じ割り当て:
+             STOP / DEL = BackSpace、カナ = 半角/全角、SHIFT / GRPH(Alt)/ CTR はトグル(RETURN で SHIFT は戻る)
 """
 import argparse
 import ctypes
@@ -125,11 +126,77 @@ SC = {
     **{c: s for c, s in zip("1234567890", range(0x02, 0x0C))},
     "-": 0x0C, "^": 0x0D, "YEN": 0x7D, "@": 0x1A, "[": 0x1B, ";": 0x27, ":": 0x28, "]": 0x2B,
     ",": 0x33, ".": 0x34, "/": 0x35, "_": 0x73,
-    "RETURN": 0x1C, "SPACE": 0x39, "ESC": 0x01, "DEL": 0x0E, "CTR": 0x1D, "LSHIFT": 0x2A, "RSHIFT": 0x36,
+    "RETURN": 0x1C, "SPACE": 0x39, "ESC": 0x01, "DEL": 0x0E, "STOP": 0x0E, "CTR": 0x1D, "LSHIFT": 0x2A, "RSHIFT": 0x36,
     "GRPH": 0x38, "KANA": 0x29,
     **{f"F{n}": 0x3A + n for n in range(1, 9)},
     "INS": 0xE052, "CLRHOME": 0xE047, "UP": 0xE048, "DOWN": 0xE050, "LEFT": 0xE04B, "RIGHT": 0xE04D,
 }
+
+
+class KeyboardBridge:
+    """ファミリーベーシックのキーボード → PC のキー。前に作った拡張端子 ⇔ USB 変換器
+    (github.com/SHIMA-R7/Famicom-Expand-USB-Adapter、実機で確かめた割り当て)と同じふるまいにする:
+      ・1 キーずつのチャタリング対策(同じ値が DEBOUNCE 回続いたら確定。行ごとでは効かなかった)
+      ・SHIFT / GRPH(Alt)/ CTR はトグル(押すたびに ON / OFF)。RETURN で SHIFT は戻る
+      ・STOP と DEL は BackSpace
+    send(scancode, up) で PC に送る(試験の時は差し替える)"""
+    DEBOUNCE = 2                                            # 6502 は 60 回/秒に読むので 2 回 = 約 33ms
+    TOGGLES = {"LSHIFT": ("shift", 0x2A), "RSHIFT": ("shift", 0x2A), "GRPH": ("alt", 0x38), "CTR": ("ctrl", 0x1D)}
+    ALL = [n for row in KB_NAMES for n in row]
+
+    def __init__(self, send):
+        self.send = send
+        self.stable = {k: False for k in self.ALL}
+        self.cand = {k: False for k in self.ALL}
+        self.count = {k: self.DEBOUNCE for k in self.ALL}
+        self.held = set()                                   # PC に「押した」と送ってあるキー(トグル以外)
+        self.toggle = {"shift": False, "alt": False, "ctrl": False}
+
+    def update(self, pressed):
+        if len(pressed) >= 72:                              # 全部押されて見える = キーボードがつながっていない
+            pressed = set()
+        for k in self.ALL:
+            on = k in pressed
+            if on == self.cand[k]:
+                self.count[k] = min(self.count[k] + 1, 255)
+            else:
+                self.cand[k], self.count[k] = on, 1
+            if self.count[k] >= self.DEBOUNCE and self.stable[k] != on:
+                self.stable[k] = on
+                self._event(k, on)
+
+    def _set_toggle(self, name, code, on):
+        if self.toggle[name] != on:
+            self.toggle[name] = on
+            self.send(code, not on)
+
+    def _event(self, k, down):
+        if k in self.TOGGLES:
+            name, code = self.TOGGLES[k]
+            if down:
+                self._set_toggle(name, code, not self.toggle[name])
+            return
+        code = SC.get(k)
+        if code is None:
+            return
+        if down:
+            self.send(code, False)
+            self.held.add(k)
+            if k == "RETURN":                               # 変換器と同じく、RETURN で SHIFT を戻す
+                self._set_toggle("shift", 0x2A, False)
+        elif k in self.held:
+            self.send(code, True)
+            self.held.discard(k)
+
+    def release_all(self):
+        for k in list(self.held):
+            self.send(SC[k], True)
+        self.held.clear()
+        for name, code in (("shift", 0x2A), ("alt", 0x38), ("ctrl", 0x1D)):
+            self._set_toggle(name, code, False)
+        for k in self.ALL:
+            self.stable[k] = self.cand[k] = False
+            self.count[k] = self.DEBOUNCE
 
 
 def kb_pressed(rows):
@@ -261,7 +328,8 @@ def main():
     port = Port(name)
     print(f"{name} を開いた。{mode}、最大 {a.fps} fps。止める時は Ctrl+C")
     rx = b""
-    pad_prev, held, kb_prev, kb_seen = 0, 0, set(), False
+    pad_prev, held = 0, 0
+    kb = KeyboardBridge(send_scancode)
     speed = 0.0
     sent, t_start, next_t = 0, time.perf_counter(), 0.0
     last_io = time.perf_counter()
@@ -269,15 +337,13 @@ def main():
 
     def release_all():
         """押しっぱなしのキーとマウスのボタンを離す(入力が途切れた時・止める時)"""
-        nonlocal kb_prev, pad_prev
-        for k in kb_prev:
-            if k in SC and k != "STOP":
-                send_scancode(SC[k], True)
+        nonlocal pad_prev
+        kb.release_all()
         if pad_prev & 0x80:
             send_mouse_button(0x0004)
         if pad_prev & 0x40:
             send_mouse_button(0x0010)
-        kb_prev, pad_prev = set(), 0
+        pad_prev = 0
 
     try:
         while True:
@@ -285,7 +351,7 @@ def main():
             data = port.read()
             if data:
                 rx += data
-            if time.perf_counter() - last_io > 0.5 and (kb_prev or pad_prev):
+            if time.perf_counter() - last_io > 0.5 and (kb.held or any(kb.toggle.values()) or pad_prev):
                 release_all()                                   # 0.5 秒届かない(ケーブルが抜けた等)
             if b"FCIN" in rx:
                 last_io = time.perf_counter()
@@ -317,22 +383,7 @@ def main():
                     view.follow = not view.follow
                     print("追従:", view.follow)
                 pad_prev = pad
-                # キーボード(全部押されて見える = つながっていない)
-                keys = kb_pressed(io[1:10])
-                if len(keys) >= 72:
-                    keys = set()
-                elif keys and not kb_seen:
-                    kb_seen = True
-                for k in sorted(keys - kb_prev):
-                    if k == "STOP":                                                         # STOP = Ctrl+C
-                        send_scancode(0x1D, False); send_scancode(0x2E, False)
-                        send_scancode(0x2E, True); send_scancode(0x1D, True)
-                    elif k in SC:
-                        send_scancode(SC[k], False)
-                for k in sorted(kb_prev - keys):
-                    if k in SC and k != "STOP":
-                        send_scancode(SC[k], True)
-                kb_prev = keys
+                kb.update(kb_pressed(io[1:10]))                                            # キーボード
             # ---- 画面 ----
             now = time.perf_counter()
             if now >= next_t:

@@ -24,6 +24,11 @@ from asm6502 import Asm   # noqa: E402
 PAL, ATTR, OAM, IO = 0x5D00, 0x5D20, 0x5E00, 0x5F00
 PAD, KB, FRAME = IO, IO + 1, IO + 0x0F
 ROW, TMP, NTC = 0x00, 0x01, 0x02                   # ゼロページ(このプログラムだけが使う)
+# キーボードの列を選んでから読むまでの待ち。nesdev は約 50 サイクルだが、前に作った拡張端子 ⇔ USB 変換器
+# (github.com/SHIMA-R7/Famicom-Expand-USB-Adapter)では 300us で不安定、500us で安定した(寄生容量)ので 500us にする。
+# 18 回で約 9ms。VBlank の PPU の仕事が終わってから読むので、画面には響かない(NMI の中で次の NMI までに終わる)
+KB_WAIT_US = 500
+KB_WAIT_LOOPS = min(255, round((KB_WAIT_US * 1.789773 - 12) / 5))   # DEX + BNE = 5 サイクル、JSR/LDX/RTS で約 12
 CTRL = 0x88                                        # NMI 有効、背景 = $0000、スプライト = $1000、8x8
 MASK = 0x1E                                        # 背景とスプライトを表示(左端 8 ドットも)
 
@@ -74,21 +79,20 @@ a.lda_imm(1); a.sta(0x4016); a.lda_imm(0); a.sta(0x4016)
 a.ldx_imm(8)
 a.label("pad"); a.lda_abs(0x4016); a.lsr_a(); a.rol_abs(PAD); a.dex(); a.bne("pad")
 a.lda_imm(0x05); a.sta(0x4016)                                      # キーボード: 行 0 へ戻して有効に
-for _ in range(6):
-    a.nop()
+a.jsr("kbwait")
 a.ldy_imm(0)
 a.label("kb")
-a.lda_imm(0x04); a.sta(0x4016); a.jsr("wait50")                     # 列 0
+a.lda_imm(0x04); a.sta(0x4016); a.jsr("kbwait")                     # 列 0
 a.lda_abs(0x4017); a.and_imm(0x1E); a.lsr_a(); a.sta_zp(TMP)
-a.lda_imm(0x06); a.sta(0x4016); a.jsr("wait50")                     # 列 1(次に列 0 にすると行が進む)
+a.lda_imm(0x06); a.sta(0x4016); a.jsr("kbwait")                     # 列 1(次に列 0 にすると行が進む)
 a.lda_abs(0x4017); a.and_imm(0x1E); a.asl_a(); a.asl_a(); a.asl_a(); a.ora_zp(TMP)
 a.sta_absy(KB)
 a.iny(); a.cpy_imm(9); a.bne("kb")
 a.lda_imm(0); a.sta(0x4016)
 a.inc_abs(FRAME)
 a.pla(); a.tay(); a.pla(); a.tax(); a.pla(); a.rti()
-a.label("wait50")                                                   # JSR 込みで約 53 サイクル
-a.ldx_imm(8)
+a.label("kbwait")                                                   # 列を選んでから読むまでの待ち(KB_WAIT_US)
+a.ldx_imm(KB_WAIT_LOOPS)
 a.label("w"); a.dex(); a.bne("w")
 a.rts()
 a.label("irq"); a.rti()
