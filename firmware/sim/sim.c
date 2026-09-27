@@ -12,6 +12,8 @@
 //                       例 "100:A:3,110:RETURN:3,120:LSHIFT+1:3"(+ で同時押し)
 //     --remote-frame F  画面転送モード: F(tools/nesframe.py の write_frame)を PC から届いた 1 枚として渡す
 //     --remote-at N     それを渡すフレーム(既定 30)
+//   ROM の代わりにライブラリ(tools/nes_pack.py --library の出力)を渡すと、ゲーム選択メニューから始める。
+//   メニューで選ばれたら、実機の「番号を覚えて再起動」の代わりに、選ばれた ROM に入れ替えて動かし続ける。
 //   DIR/hashes.txt に毎フレームの画面のハッシュを書く(native と magicon を比べるため)。
 //
 // magicon のモードでは、CPU の全サイクルと PPU の読み出しを、実機の PIO と同じ形の値にして cart.c に渡す
@@ -189,7 +191,13 @@ int main(int argc, char **argv) {
     agnes_t *ag = agnes_make();
     apu_init();
     cart_info_t info;
-    if (magicon_on) {
+    const lib_header_t *lib = (len >= 16 && !memcmp(data, "FCLB", 4)) ? (const lib_header_t *)data : NULL;
+    const lib_entry_t *lib_e = lib ? (const lib_entry_t *)(lib + 1) : NULL;
+    if (lib && magicon_on) {
+        cart_load_menu(lib_e, (int)lib->count, &info);
+        printf("magicon: game select menu, %u items\n", lib->count);
+        agnes_load_magicon(ag);
+    } else if (magicon_on) {
         const char *err = cart_load(data, (uint32_t)len, &info);
         if (err) { fprintf(stderr, "magicon: %s\n", err); return 1; }
         if (info.is_remote)
@@ -254,6 +262,17 @@ int main(int argc, char **argv) {
             break;
         }
         if (host_irq) n_irq_cycles++;
+        if (lib && info.is_menu && cart_menu_choice() >= 0) {        // メニューで選ばれた(実機はここで再起動する)
+            int k = cart_menu_choice();
+            if (k >= (int)lib->count) { fprintf(stderr, "menu: bad choice %d\n", k); return 1; }
+            const lib_entry_t *e = &lib_e[k];
+            uint32_t sum = 0;
+            for (uint32_t i = 0; i < e->len; i++) sum += data[e->offset + i];
+            const char *err = sum != e->sum ? "checksum mismatch" : cart_load(data + e->offset, e->len, &info);
+            if (err) { fprintf(stderr, "menu: %s: %s\n", e->name, err); return 1; }
+            printf("  frame %5d  menu: picked %d \"%s\"%s\n", fr, k, e->name,
+                   info.is_remote ? " (remote desktop)" : info.is_nsf ? " (NSF)" : "");
+        }
         fprintf(hf, "%d %016llx\n", fr, (unsigned long long)frame_hash(ag));
         if (shot_every > 0 && fr % shot_every == 0) {
             snprintf(path, sizeof path, "%s/frame%05d.bmp", out, fr);

@@ -4,7 +4,15 @@
   形式: "FCMG" + 長さ + バイトの合計 + 予備(各4バイト、リトルエンディアン)の後ろに .nes をそのまま。
   ヘッダーを読んで、マッパー・大きさ・magicon で動くかを表示する(動かない時は終了コード 1)。
   書き込みは load_rom.ps1(picotool)から。
+
+    python nes_pack.py --library out.bin [--add-remote] フォルダーやファイル...
+  複数の ROM を 1 つにまとめる(ゲーム選択メニュー)。フォルダーなら中の .nes / .nsf を全部。動かない ROM は飛ばす。
+  形式: "FCLB" + 項目の数 + 全体の長さ + 予備(16 バイト)、項目 64 バイト × 数(題名 48 + 位置 + 長さ + 合計 + 予備)、
+        その後ろに中身(1 本だけの時と同じ .nes / .nsf / "FCRD")。位置は置き場の先頭から。8MB まで、127 本まで。
+  題名はファイル名(大文字)、NSF は曲集の題名。同じフォルダーの titles.txt に「ファイル名=題名」と書くとそれを使う。
+  --add-remote で「REMOTE DESKTOP」(画面転送モード)も項目に入れる。
 """
+import os
 import struct
 import sys
 
@@ -43,22 +51,102 @@ def nsf(src, data):
     return ok
 
 
+def check(src, data):
+    """表示して、magicon で動くかを返す"""
+    if data[:5] == b"NESM\x1a":
+        return nsf(src, data)
+    if data[:4] != b"NES\x1a":
+        print(f"{src}\n  ! iNES / NSF ファイルではない")
+        return False
+    return nes(src, data)
+
+
+LIB_SPACE, LIB_MAX, ENTRY = 8 * 1024 * 1024, 127, 64
+TITLE_LEN = 28                           # メニューに出る長さ(gen_menu_driver.py)
+
+
+def ascii_title(s):
+    t = "".join(c if " " <= c < "\x7f" else "?" for c in s).strip()
+    return t[:47] or "?"
+
+
+def library(dst, args):
+    add_remote = "--add-remote" in args
+    paths = []
+    for p in (a for a in args if a != "--add-remote"):
+        if os.path.isdir(p):
+            paths += sorted(os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith((".nes", ".nsf")))
+        else:
+            paths.append(p)
+    titles = {}
+    for d in {os.path.dirname(os.path.abspath(p)) for p in paths}:
+        tf = os.path.join(d, "titles.txt")
+        if os.path.exists(tf):
+            for line in open(tf, encoding="utf-8"):
+                if "=" in line and not line.lstrip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    titles[k.strip().lower()] = v.strip()
+    items, skipped = [], []
+    for p in paths:
+        data = open(p, "rb").read()
+        if not check(p, data):
+            skipped.append(os.path.basename(p))
+            continue
+        name = os.path.basename(p)
+        if name.lower() in titles:
+            title = titles[name.lower()]
+        elif data[:5] == b"NESM\x1a":
+            title = data[0x0E:0x2E].split(b"\0")[0].decode("ascii", "replace") or os.path.splitext(name)[0]
+        else:
+            title = os.path.splitext(name)[0].replace("_", " ").upper()
+        items.append((ascii_title(title), data))
+    items.sort(key=lambda it: it[0].upper())
+    if add_remote:
+        items.append(("REMOTE DESKTOP", b"FCRD"))
+    if not items:
+        sys.exit("入れられる ROM が 1 本も無い")
+    if len(items) > LIB_MAX:
+        sys.exit(f"{len(items)} 本は多過ぎる({LIB_MAX} 本まで)")
+    head = bytearray(16 + ENTRY * len(items))
+    body = bytearray()
+    off = (len(head) + 15) & ~15
+    for i, (title, data) in enumerate(items):
+        pos = off + len(body)
+        struct.pack_into("<48sIIII", head, 16 + ENTRY * i, title.encode("ascii"), pos, len(data),
+                         sum(data) & 0xFFFFFFFF, 0)
+        body += data + bytes((-len(data)) % 16)
+    total = off + len(body)
+    if total > LIB_SPACE:
+        sys.exit(f"合計 {total / 1048576:.1f}MB は大き過ぎる(8MB まで)")
+    struct.pack_into("<4sIII", head, 0, b"FCLB", len(items), total, 0)
+    open(dst, "wb").write(bytes(head) + bytes(off - len(head)) + bytes(body))
+    print(f"\nライブラリ {len(items)} 本、{total / 1024:.0f}KB -> {dst}")
+    for title, _ in items:
+        cut = "" if len(title) <= TITLE_LEN else f"(メニューでは {TITLE_LEN} 文字まで)"
+        print(f"  {title}{cut}")
+    if skipped:
+        print(f"入れなかった(動かない): {', '.join(skipped)}")
+
+
 def main():
     src, dst = sys.argv[1], sys.argv[2]
+    if src == "--library":
+        library(dst, sys.argv[3:])
+        return
     if src == "--remote":               # 画面転送(リモートデスクトップ)モードで起動する印
         data = b"FCRD"
         open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
         print(f"画面転送モード -> {dst}")
         return
     data = open(src, "rb").read()
-    if data[:5] == b"NESM\x1a":
-        if not nsf(src, data):
-            sys.exit(1)
-        open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
-        print(f"  -> {dst} ({len(data) + 16} バイト)")
-        return
-    if data[:4] != b"NES\x1a":
-        sys.exit(f"{src}: iNES / NSF ファイルではない")
+    if not check(src, data):
+        sys.exit(1)
+    open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
+    print(f"  -> {dst} ({len(data) + 16} バイト)")
+
+
+def nes(src, data):
+    """.nes の情報を表示して、magicon で動くかを返す"""
     nes2 = (data[7] & 0x0C) == 0x08
     prg_n, chr_n = data[4], data[5]
     if nes2:
@@ -80,10 +168,7 @@ def main():
         ok = False
     if data[6] & 2:
         print("  (バッテリーバックアップのセーブは、まだ電源を切ると消える)")
-    if not ok:
-        sys.exit(1)
-    open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
-    print(f"  -> {dst} ({len(data) + 16} バイト)")
+    return ok
 
 
 if __name__ == "__main__":

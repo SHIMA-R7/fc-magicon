@@ -28,6 +28,7 @@ INCLUDE = [
     "firmware/tools/*.py", "firmware/out/*.uf2",
     "firmware/wifi_bridge/wifi_bridge.ino", "firmware/wifi_bridge/wifi_secrets.example.h", "firmware/wifi_bridge/build_bridge.ps1",
     "docs/build_manual.py", "docs/user_manual_body.md", "docs/user_manual.md", "docs/user_manual.pdf",
+    "docs/build_system_spec.py", "docs/system_spec_body.md", "docs/system_spec.md", "docs/system_spec.pdf",
     "firmware/sim/*.c", "firmware/sim/*.h", "firmware/sim/*.py", "firmware/sim/*.ps1", "firmware/sim/agnes/*",
     "3d/*.py", "3d/*.step", "kicad/3d/*.step",
     "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",   # label_print.png(印刷用、大きい)は作り直せるので上げない

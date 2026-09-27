@@ -65,11 +65,16 @@ def key_table():
     return "英字・数字(A〜Z、0〜9)は刻印どおり。それ以外:\n\n" + "\n".join(rows)
 
 
-body = open(os.path.join(HERE, "user_manual_body.md"), encoding="utf-8").read()
-md = body.replace("{{MAPPER_TABLE}}", mapper_table()).replace("{{KEY_TABLE}}", key_table())
-out_md = os.path.join(HERE, "user_manual.md")
-open(out_md, "w", encoding="utf-8", newline="\n").write(md)
-cmd = [sys.executable, os.path.join(HERE, "..", "..", "md2pdf.py"), out_md, os.path.join(HERE, "user_manual.pdf")]
-if "--print" in sys.argv:
-    cmd.append("--print")
-sys.exit(subprocess.call(cmd))
+def main():
+    body = open(os.path.join(HERE, "user_manual_body.md"), encoding="utf-8").read()
+    md = body.replace("{{MAPPER_TABLE}}", mapper_table()).replace("{{KEY_TABLE}}", key_table())
+    out_md = os.path.join(HERE, "user_manual.md")
+    open(out_md, "w", encoding="utf-8", newline="\n").write(md)
+    cmd = [sys.executable, os.path.join(HERE, "..", "..", "md2pdf.py"), out_md, os.path.join(HERE, "user_manual.pdf")]
+    if "--print" in sys.argv:
+        cmd.append("--print")
+    sys.exit(subprocess.call(cmd))
+
+
+if __name__ == "__main__":             # build_system_spec.py が表の関数だけ使うので、読み込んだだけでは作らない
+    main()

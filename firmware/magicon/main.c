@@ -14,6 +14,7 @@
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/structs/sio.h"
+#include "hardware/watchdog.h"
 #include "cart.h"
 #include "audio.h"
 #if MAGICON_USB_HOST
@@ -48,9 +49,66 @@ static void bus_pins_input(void) {
     }
 }
 
+// ---- ゲーム選択メニュー ----
+// メニューで選ぶと、番号をウォッチドッグのメモ(scratch[0]、再起動しても消えない。電源が切れると消える)に残して
+// 再起動し、次の起動でその ROM を読み込む。本体側はその間、本体 RAM のプログラムで 1.5 秒待っている(gen_menu_driver.py)
+#define PICK_MAGIC     0xFC010000u
+#define LIB_SPACE      0x00800000u      // ライブラリに使える大きさ(8MB 目からフラッシュの終わりまで)
+
+static void reboot_with_pick(uint32_t pick) {
+    watchdog_hw->scratch[0] = pick;
+    watchdog_reboot(0, 0, 0);
+    for (;;) tight_loop_contents();
+}
+
+// 本体の電源が切れたら(5V が 50ms 続けて無い)再起動する: 次に電源を入れた時はメニューから
+static void check_power(void) {
+    static bool low;
+    static absolute_time_t since;
+    if (gpio_get(PIN_FC_5V)) {
+        low = false;
+        return;
+    }
+    if (!low) {
+        low = true;
+        since = get_absolute_time();
+    } else if (absolute_time_diff_us(since, get_absolute_time()) > 50000) {
+        reboot_with_pick(0);
+    }
+}
+
+static const char *load_entry(const lib_entry_t *e, cart_info_t *info) {
+    if (e->offset > LIB_SPACE || e->len > LIB_SPACE - e->offset || e->len < 4)
+        return "bad library entry";
+    const uint8_t *p = (const uint8_t *)(XIP_BASE + ROM_SLOT + e->offset);
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < e->len; i++)
+        sum += p[i];
+    if (sum != e->sum)
+        return "checksum mismatch in library (write it again)";
+    return cart_load(p, e->len, info);
+}
+
+static const char *load_library(cart_info_t *info) {
+    const lib_header_t *lh = (const lib_header_t *)(XIP_BASE + ROM_SLOT);
+    const lib_entry_t *e = (const lib_entry_t *)(lh + 1);
+    if (lh->count == 0 || lh->count > LIB_MAX_ITEMS)
+        return "bad library header";
+    uint32_t pick = watchdog_hw->scratch[0];
+    watchdog_hw->scratch[0] = 0;
+    if ((pick & 0xFFFF0000u) == PICK_MAGIC && (pick & 0xFFFF) < lh->count)
+        return load_entry(&e[pick & 0xFFFF], info);
+    if (lh->count == 1)
+        return load_entry(&e[0], info);
+    cart_load_menu(e, (int)lh->count, info);
+    return NULL;
+}
+
 static const char *load_from_flash(cart_info_t *info) {
     const slot_header_t *h = (const slot_header_t *)(XIP_BASE + ROM_SLOT);
     const uint8_t *nes = (const uint8_t *)(h + 1);
+    if (memcmp(h->magic, "FCLB", 4) == 0)
+        return load_library(info);
     if (memcmp(h->magic, "FCMG", 4) != 0)
         return "no ROM in flash (write one with load_rom.ps1)";
     if (h->len < 4 || h->len > 4u * 1024 * 1024)        // 4 = 画面転送モードの印 "FCRD"
@@ -137,6 +195,7 @@ static void __attribute__((noreturn)) remote_loop(void) {
     for (;;) {
         send_input(&last_frame);
         audio_poll();
+        check_power();
         // "FCFR" / "FCAU" を探す(途中から読み始めても合うように 1 バイトずつ)
         if (read_exact(&c, 1, 1) != 1) continue;
         match = (match << 8) | c;
@@ -206,11 +265,16 @@ int main(void) {
     for (;;) {
         for (int i = 0; i < 1000; i++) {
             usb_poll();
+            check_power();
+            if (info.is_menu && cart_menu_choice() >= 0)
+                reboot_with_pick(PICK_MAGIC | (uint32_t)cart_menu_choice());   // 選ばれた ROM で起動し直す
             sleep_ms(1);
         }
         uint32_t c = stat_cpu, p = stat_ppu, w = stat_wr;
         if (err)
             printf("[test screen] %s | ", err);
+        else if (info.is_menu)
+            printf("[game select menu] ");
         else if (info.is_nsf)
             printf("[NSF \"%s\" / %s  %d songs  load $%04X init $%04X play $%04X%s%s] ", info.nsf_title, info.nsf_artist,
                    info.nsf_songs, info.nsf_load, info.nsf_init, info.nsf_play, info.nsf_banked ? "  banked" : "",

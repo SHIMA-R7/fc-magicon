@@ -11,6 +11,7 @@ typedef struct {
     bool vertical;                      // ヘッダーのミラーリング(1 = 垂直)
     bool battery;
     bool is_remote;                     // 画面転送(リモートデスクトップ)モード
+    bool is_menu;                       // ゲーム選択メニュー
     // NSF の時
     bool is_nsf, nsf_banked;
     uint8_t nsf_songs, nsf_start, nsf_exp;          // nsf_exp = 拡張音源のビット(まだ鳴らさない)
@@ -20,6 +21,18 @@ typedef struct {
 
 // iNES / NES 2.0 または NSF("NESM")を読み込む。失敗したらエラーの文字列、成功したら NULL
 const char *cart_load(const uint8_t *ines, uint32_t len, cart_info_t *info);
+
+// ---- ライブラリ(フラッシュの ROM 置き場に複数の ROM。tools/nes_pack.py --library が作る) ----
+//   "FCLB" + 項目の数 + 全体の長さ + 予備 の後ろに項目(64 バイト)が並び、中身は置き場の先頭からの位置に置く。
+//   中身は 1 本だけの時(load_rom.ps1 game.nes)と同じ: .nes / .nsf / "FCRD"(画面転送)
+typedef struct { char magic[4]; uint32_t count, total, reserved; } lib_header_t;
+typedef struct { char name[48]; uint32_t offset, len, sum, reserved; } lib_entry_t;
+#define LIB_MAX_ITEMS 127
+
+// ゲーム選択メニュー(NROM としてその場で組み立てる。プログラムは gen_menu_driver.py)
+void cart_load_menu(const lib_entry_t *entries, int count, cart_info_t *info);
+// メニューで選ばれた番号(まだなら -1)。本体側が $5FF0 に書く
+int cart_menu_choice(void);
 // ROM が無い時の試験画面(chr_test と同じ: 4色の縦縞 + 8ドットごとの格子、音)
 void cart_load_fallback(cart_info_t *info);
 // PIO を設定し、コア1でバスの応答を始める(本体の 5V を確かめてから呼ぶ)

@@ -385,9 +385,10 @@ def frame_packet(fr, cursor):
 
 
 # ---------------- 本体 ----------------
-def main():
+def build_parser():
+    """オプション(docs/build_system_spec.py が仕様書の表にも使う)"""
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port")
+    ap.add_argument("--port", metavar="COMx", help="COM ポートを指定する(既定: USB シリアルを探す)")
     ap.add_argument("--color", action="store_true", help="カラー(既定は灰色 4 階調。文字が読みやすい)")
     ap.add_argument("--tcp", nargs="?", const="fc-magicon.local", metavar="HOST",
                     help="Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ。HOST を省くと fc-magicon.local")
@@ -397,7 +398,11 @@ def main():
     ap.add_argument("--audio", choices=["pcm16", "pcm8", "adpcm"],
                     help="音の形式(既定: USB 直結 pcm16 = 64KB/秒、Wi-Fi pcm8 = 32KB/秒。adpcm = 16KB/秒は雑音が多い)")
     ap.add_argument("--volume", type=float, default=1.0, help="送る音の大きさ(1.0 = そのまま)")
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    a = build_parser().parse_args()
     view = View()
     mode = "color" if a.color else "gray"
 

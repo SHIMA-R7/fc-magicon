@@ -9,7 +9,7 @@ $work = "C:\Users\Yugo\pico\work\sim"
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory $work | Out-Null
 Copy-Item "$PSScriptRoot\*.c", "$PSScriptRoot\*.h", "$PSScriptRoot\agnes\agnes.h" $work
-Copy-Item "$PSScriptRoot\..\magicon\cart.c", "$PSScriptRoot\..\magicon\cart.h", "$PSScriptRoot\..\magicon\nsf_driver.h", "$PSScriptRoot\..\magicon\remote_driver.h", "$PSScriptRoot\..\chr_test\chr_rom.h" $work
+Copy-Item "$PSScriptRoot\..\magicon\cart.c", "$PSScriptRoot\..\magicon\cart.h", "$PSScriptRoot\..\magicon\nsf_driver.h", "$PSScriptRoot\..\magicon\remote_driver.h", "$PSScriptRoot\..\magicon\menu_driver.h", "$PSScriptRoot\..\chr_test\chr_rom.h" $work
 Push-Location $work
 & $zig cc -O2 -std=gnu11 -DCART_HOST -Wall -Wno-unused-function -I. -o sim.exe sim.c apu.c agnes_magicon.c cart.c
 $rc = $LASTEXITCODE

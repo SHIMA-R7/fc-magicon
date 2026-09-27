@@ -26,6 +26,7 @@
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
 #include "remote_driver.h"              // 画面転送モードの 6502 プログラムとカーソル(gen_remote_driver.py)
 #include "nsf_driver.h"                 // NSF プレイヤーのドライバー($5000-)・画面の土台・CHR(gen_nsf_driver.py)
+#include "menu_driver.h"                // ゲーム選択メニューの 6502 プログラム・画面の土台(gen_menu_driver.py)
 
 #define PIN_IRQ     45                  // High で Q1 が /IRQ を Low にする
 #define B_ROMSEL    (1u << 23)
@@ -43,6 +44,8 @@ static uint32_t prg_size, chr_size;     // chr_size は CHR-RAM の時 0x2000
 static bool chr_is_ram;
 static int mapper;
 static bool is_remote;                  // 画面転送モード(下の「画面転送」)
+static bool is_menu;                    // ゲーム選択メニュー(下の「メニュー」)
+static volatile int menu_choice = -1;
 
 static uint8_t *prg_map[4];             // $8000 / $A000 / $C000 / $E000 の 8KB
 static uint8_t *chr_map[8];             // $0000〜$1FFF の 1KB ずつ
@@ -224,6 +227,8 @@ static void __not_in_flash_func(cpu_write)(uint addr, uint d) {
         }
     } else if ((addr & 0xE000) == 0x2000) {
         ppu_reg_write(addr, d);
+    } else if (addr == MENUD_SELECT && is_menu) {
+        menu_choice = d;                // メニューで選ばれた(コア0 が見て再起動する)
     }
 }
 
@@ -444,6 +449,7 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     memset(wram, 0, sizeof wram);
     is_nsf = true;
     is_remote = false;
+    is_menu = false;
     nsf_banked = info->nsf_banked;      // $5FF8-$5FFF の書き込みを効かせるか(PC の試験台で見つけた抜け)
     mapper = -1;
     is_mmc3 = false;
@@ -581,6 +587,7 @@ static const char *remote_load(cart_info_t *info) {
     rd_io[0] = 0;
     is_remote = true;
     is_nsf = false;
+    is_menu = false;
     mapper = -1;
     is_mmc3 = false;
     mir = -1;
@@ -632,6 +639,7 @@ const char *cart_mapper_name(int m) {
 static void reset_map(const cart_info_t *info) {
     is_nsf = false;
     is_remote = false;
+    is_menu = false;
     mapper = info->mapper;
     is_mmc3 = mapper == 4;
     prg = rom;
@@ -708,6 +716,40 @@ void cart_load_fallback(cart_info_t *info) {
     }
     reset_map(info);
 }
+
+// ---- メニュー ----
+// NROM(PRG 32KB + CHR 8KB)を組み立てる。配置は gen_menu_driver.py の説明のとおり。CHR は NSF プレイヤーのフォントとロゴ
+void cart_load_menu(const lib_entry_t *e, int count, cart_info_t *info) {
+    if (count > LIB_MAX_ITEMS)
+        count = LIB_MAX_ITEMS;
+    memset(rom, 0xFF, 0x8000);
+    rom[MENUD_COUNT] = (uint8_t)count;
+    for (int i = 0; i < count; i++) {
+        uint32_t at = MENUD_TITLE_ADDR + i * MENUD_TITLE_LEN;
+        rom[MENUD_PTR_LO + i] = at & 0xFF;
+        rom[MENUD_PTR_HI + i] = at >> 8;
+        uint8_t *t = rom + MENUD_TITLES + i * MENUD_TITLE_LEN;
+        memset(t, ' ', MENUD_TITLE_LEN);
+        for (int k = 0; k < MENUD_TITLE_LEN && k < (int)sizeof e[i].name && e[i].name[k]; k++) {
+            char c = e[i].name[k];
+            t[k] = (c >= 0x20 && c < 0x7F) ? c : '?';
+        }
+    }
+    memcpy(rom + MENUD_NT, menud_nt, sizeof menud_nt);
+    memcpy(rom + MENUD_CODE, menud_code, sizeof menud_code);     // ベクターまで入っている
+    memcpy(rom + 0x8000, nsfd_chr, 0x1000);
+    memcpy(rom + 0x9000, nsfd_chr, 0x1000);
+    memset(info, 0, sizeof *info);
+    info->prg_size = 0x8000;
+    info->chr_size = 0x2000;
+    info->vertical = true;
+    info->is_menu = true;
+    reset_map(info);
+    is_menu = true;
+    menu_choice = -1;
+}
+
+int cart_menu_choice(void) { return menu_choice; }
 
 #ifndef CART_HOST
 void cart_start(void) {
