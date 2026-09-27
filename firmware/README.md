@@ -175,7 +175,13 @@ python tools/remote_pc.py --tcp          # fc-magicon.local(C6 が mDNS で名�
     LED は SIO のレジスターを直接たたく(magicon では同じ関数で止まっていないので、原因はまだ分かっていない)。
   - 調べるのに debugprobe(Pico、`debugprobe_on_pico.uf2` v2.3.1)+ xPack OpenOCD 0.12.0-7(`C:\Users\Yugo\pico\openocd`)で SWD を使った。
     SWD からのリセット(`reset`・ウォッチドッグ)は起動がおかしくなるので、書いた後は電源を入れ直す。
-- **まだ無いもの: magicon の画面転送モードを USB ホストで動かすこと**(C6 の USB は Serial/JTAG でデバイス専用なので、RP2350 がホストになる)。
+- **`magicon_wifi.uf2`**: magicon の画面転送モードを USB ホストで動かす版(同じ `magicon/main.c` を `MAGICON_USB_HOST=1`、
+  TinyUSB 0.21 でビルド。設定は `magicon/usb_host/tusb_config.h`)。J6 の C6 から画面を受け取り、入力(FCIN)を返す。
+  - pico-sdk の USB シリアルはアプリが TinyUSB のホストを使うと丸ごと無効になるので、1 つのファームウェアに PC 直結と
+    Wi-Fi の両方は入れていない。Wi-Fi で使う時は `magicon_wifi.uf2`、PC 直結・ROM の書き込みは `magicon.uf2`。
+  - `magicon_wifi` の時は USB シリアルも picotool の自動書き込みモードも無い。書き換えは BOOTSEL + RESET で。
+  - 2026-09-27 に Core2350B2 単体 + C6 で、Wi-Fi から送った 1 枚が裏画面(`rom` の中)にそのまま入ることを確かめた
+    (GPIO46 を 3V3 につないで 5V の代わりにした。ファミコンが無いので 2 枚目以降と FCIN は未確認)。
   つなぎ方は J6 の 2(D-)→ C6 の GPIO12、3(D+)→ GPIO13、4 → GND。C6 は別の USB 電源で動かす
   (J6 の VBUS から取ると、Wi-Fi の電流が本体の 5V に乗る)。J6 と FPC の USB に同時に機器をつながない。
 

@@ -45,6 +45,7 @@ FC-MAGICON(RP2350B のファミコン用カセット)を実際に使う時の手
 | `bus_test.uf2` | 最初の動作確認 1(CPU バス) |
 | `chr_test.uf2` | 最初の動作確認 2(PPU の読み取り) |
 | `magicon.uf2` | ふだん使う(ゲーム・NSF・リモートデスクトップ) |
+| `magicon_wifi.uf2` | リモートデスクトップを Wi-Fi(J6 の ESP32-C6)で使う時 |
 
 ### 最初の動作確認(基板を作って最初の 1 回)
 
@@ -103,7 +104,7 @@ FC-MAGICON(RP2350B のファミコン用カセット)を実際に使う時の手
 | `--port COM5` | COM ポートを指定する(自動で見つからない時) |
 | `--fps 30` | 送る速さの上限(既定 30) |
 | `--dry-run 30` | カセット無しで、画面の取り込みと変換の速さだけ測る |
-| `--tcp` | Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ(既定 25 枚/秒)。**カセット側がまだ対応していない**(下の「Wi-Fi で送る」) |
+| `--tcp` | Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ(既定 25 枚/秒)。カセットは `magicon_wifi.uf2` にする(下の「Wi-Fi で送る」) |
 
 ### 操作(1コン)
 
@@ -134,22 +135,25 @@ FC-MAGICON(RP2350B のファミコン用カセット)を実際に使う時の手
 PC 側の取り込みと変換だけの値。USB 直結は 614KB/秒(最大 40.6 枚/秒)出るので、画面を作る PC 側の速さで決まる
 (Core2350B2 単体で測定。`remote_pc.py` を流して 灰色 29.8 枚/秒、カラー 20.0 枚/秒)。
 
-### Wi-Fi で送る(ESP32-C6、作りかけ)
+### Wi-Fi で送る(ESP32-C6)
 
-**カセット側のファームウェアがまだ対応していない**(RP2350 を USB ホストにする所が未実装)。C6 と PC の間は動いている。
+カセットのファームウェアを **`magicon_wifi.uf2`** にすると、USB がホストになり、J6 につないだ C6 から画面を受け取る。**ファミコンにつないでの確認はまだ**(基板が届いてから)。
 
 1. C6 に Wi-Fi の設定を書く: `firmware\wifi_bridge\wifi_secrets.example.h` を写して `wifi_secrets.h` にし、SSID とパスワードを書く(2.4GHz)。
 2. C6 を PC につないで書き込む: `pwsh -File C:\Users\Yugo\OneDrive\ドキュメント\Claude\FC-MAGICON\firmware\wifi_bridge\build_bridge.ps1`
-3. (カセット側が対応したら)C6 と J6 を 3 本でつなぐ: J6 の 2 番(D-)→ C6 の GPIO12、3 番(D+)→ GPIO13、4 番 → GND。C6 の電源は別の USB から取る。FPC-USB アダプターは外す。
-4. PC で `python C:\Users\Yugo\OneDrive\ドキュメント\Claude\FC-MAGICON\firmware\tools\remote_pc.py --tcp`
+3. カセットを画面転送モードにしておく(`load_rom.ps1 -Remote`。`magicon.uf2` の時に)。
+4. カセットに `magicon_wifi.uf2` を書く(BOOTSEL を押したまま RESET を押して離し、出てきたドライブに `firmware\out\magicon_wifi.uf2` をコピー)。
+5. FPC-USB アダプターを外し、C6 と J6 を 3 本でつなぐ: J6 の 2 番(D-)→ C6 の GPIO12、3 番(D+)→ GPIO13、4 番 → GND。C6 の電源は別の USB(C6 の UART の USB-C を AC アダプターなど)から取る。
+6. ファミコンの電源を入れ、PC で `python C:\Users\Yugo\OneDrive\ドキュメント\Claude\FC-MAGICON\firmware\tools\remote_pc.py --tcp`
 
-| 項目 | 値(2026-09-27、PC をカセットの代わりにして測定) |
-|---|---|
-| 最大の速さ | 462KB/秒 = 30.6 枚/秒 |
-| 25 枚/秒で送った時の遅れ | 中央 37ms、最大 81ms |
-| `remote_pc.py --tcp` で流した時 | 灰色 24.5 枚/秒、カラー 19.9 枚/秒 |
-
+- `magicon_wifi` の時は、`load_rom.ps1` の自動書き込みモードも USB シリアルの表示も無い。ROM を書き換える・PC 直結に戻す時は、BOOTSEL + RESET で書き込みモードにしてから(PC 直結に戻すなら `magicon.uf2` を書く)。
 - C6 が動かない・Wi-Fi につながらない時は、C6 の USB を挿し直す(電源が弱いボードで、ブラウンアウトでリセットを繰り返すことがある)。
+
+| 項目 | 値(2026-09-27) |
+|---|---|
+| Wi-Fi → C6 → RP2350(USB ホスト、`host_test`) | 420KB/秒 = 最大 27.8 枚/秒、500 枚すべて届く |
+| Wi-Fi → C6 → PC(C6 だけ) | 462KB/秒 = 30.6 枚/秒。25 枚/秒で送ると遅れ 中央 37ms・最大 81ms |
+| `magicon_wifi` | Wi-Fi から送った 1 枚が裏画面にそのまま入る(Core2350B2 単体、ファミコン無し) |
 
 ## 困ったとき
 
@@ -176,7 +180,8 @@ PC 側の取り込みと変換だけの値。USB 直結は 614KB/秒(最大 40.6
 | CIRAM A10 を 3.3V で動かす(JP1) | **未検証**。駄目なら JP2 / JP3 |
 | USB の転送速度(画面転送の枚数/秒) | Core2350B2 単体で確認済み(614KB/秒 = 最大 40.6 枚/秒、`usb_test` + `usb_bench.py`) |
 | ROM の書き込み(`load_rom.ps1`、自動で書き込みモード) | Core2350B2 単体で確認済み(mario3 384KB、`-Remote`) |
-| Wi-Fi(ESP32-C6)→ USB の転送 | PC 相手で確認済み(最大 30.6 枚/秒、食い違い 0)。カセット側の USB ホストは未実装 |
+| Wi-Fi(ESP32-C6)→ USB の転送 | PC 相手・RP2350(USB ホスト)相手で確認済み(27.8 枚/秒、500 枚すべて届く) |
+| `magicon_wifi`(Wi-Fi の画面転送) | Core2350B2 単体で 1 枚目が裏画面に入るまで確認。**ファミコンでは未検証** |
 | バッテリーバックアップ、NSF の拡張音源 | 未実装 |
 
 ## 関係するファイル

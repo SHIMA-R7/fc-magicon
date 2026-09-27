@@ -24,7 +24,7 @@ INCLUDE = [
     "kicad/FC-MAGICON.net", "kicad/FC-MAGICON.pdf", "kicad/FC-MAGICON.pretty/*",
     "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
     "firmware/README.md", "firmware/CMakeLists.txt", "firmware/build.ps1", "firmware/boards/*.h",
-    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/magicon/*", "firmware/usb_test/*", "firmware/host_test/*","firmware/load_rom.ps1",
+    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/magicon/*", "firmware/magicon/usb_host/*","firmware/usb_test/*", "firmware/host_test/*","firmware/load_rom.ps1",
     "firmware/tools/*.py", "firmware/out/*.uf2",
     "firmware/wifi_bridge/wifi_bridge.ino", "firmware/wifi_bridge/wifi_secrets.example.h", "firmware/wifi_bridge/build_bridge.ps1",
     "docs/build_manual.py", "docs/user_manual_body.md", "docs/user_manual.md", "docs/user_manual.pdf",

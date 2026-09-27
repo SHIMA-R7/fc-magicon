@@ -5,14 +5,25 @@
 //   ・起動したら ROM を SRAM へ写し(PRG + CHR 384KB まで)、本体の 5V を待ってからバスに出る
 //   ・ROM が無い・壊れている・対応していない時は、chr_test と同じ試験画面(4色の縦縞 + 格子、音)を出す
 //   ・USB シリアルに、読み込んだ ROM の情報と、1 秒ごとの CPU サイクル・PPU 読み出し・書き込みの回数を出す
+//   ・MAGICON_USB_HOST = 1 でビルドすると magicon_wifi になる: 画面転送モードの USB を「ホスト」にして、
+//     J6 につないだ ESP32-C6(firmware/wifi_bridge、USB Serial/JTAG = CDC)とやりとりする(PC とは Wi-Fi 越し)。
+//     この時は USB シリアル(printf)も picotool の自動書き込みモードも無い。TinyUSB 0.21 が要る(build.ps1)
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
+#include "hardware/structs/sio.h"
 #include "cart.h"
+#if MAGICON_USB_HOST
+#include "tusb.h"
+#endif
 
 #define PIN_LED        39
+// LED は SIO のレジスターを直接たたく(RP2350 の gpio_xor_mask64 / gpio_put は GPIO コプロセッサー命令になり、
+// host_test ではそれで NOCP の HardFault が起きた。magicon では起きていないが、同じ書き方にそろえておく)
+#define LED_TOGGLE()   (sio_hw->gpio_hi_togl = 1u << (PIN_LED - 32))
+#define LED_ON()       (sio_hw->gpio_hi_set = 1u << (PIN_LED - 32))
 #define PIN_CIRAM_A10  43
 #define PIN_FC_5V      46
 #define BUS_PIN_LAST   42
@@ -55,6 +66,40 @@ static const char *load_from_flash(cart_info_t *info) {
 //                  絵は裏の画面へ直接読み込む。表示待ちの 1 枚がある間は読まない(PC 側がそこで待たされる)
 //   カセット → PC: "FCIN" + パッド 1 + キーボード 9 行 + 予備 5 + 6502 のフレームの数 1(= 16)
 //                  6502 のフレームの数が変わるたびに(約 60 回/秒)
+//   通り道は USB シリアル(magicon、PC 直結)か、USB ホストで開いた C6 の CDC(magicon_wifi)
+#if MAGICON_USB_HOST
+static uint8_t cdc = 0xFF;              // 開いている C6 の CDC の番号(0xFF = まだ)
+
+void tuh_cdc_mount_cb(uint8_t idx) { cdc = idx; }
+void tuh_cdc_umount_cb(uint8_t idx) { if (idx == cdc) cdc = 0xFF; }
+uint32_t tusb_time_millis_api(void) { return to_ms_since_boot(get_absolute_time()); }   // OS 無しの TinyUSB の時計
+
+static void usb_poll(void) { tuh_task(); }
+
+static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
+    int got = 0;
+    absolute_time_t until = make_timeout_time_ms(timeout_ms);
+    while (got < len) {
+        tuh_task();
+        if (cdc != 0xFF) {
+            uint32_t n = tuh_cdc_read(cdc, buf + got, (uint32_t)(len - got));
+            got += (int)n;
+            if (n) continue;
+        }
+        if (time_reached(until)) break;
+    }
+    return got;
+}
+
+static void write_packet(const uint8_t *p, int len) {
+    // 入り切らない時は捨てる(次のフレームでまた送る)
+    if (cdc == 0xFF || tuh_cdc_write_available(cdc) < (uint32_t)len) return;
+    tuh_cdc_write(cdc, p, (uint32_t)len);
+    tuh_cdc_write_flush(cdc);
+}
+#else
+static void usb_poll(void) {}
+
 static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
     int got = 0;
     absolute_time_t until = make_timeout_time_ms(timeout_ms);
@@ -66,6 +111,11 @@ static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
     return got;
 }
 
+static void write_packet(const uint8_t *p, int len) {
+    stdio_put_string((const char *)p, len, false, false);
+}
+#endif
+
 static void send_input(uint8_t *last_frame) {
     uint8_t io[16];
     cart_remote_io(io);
@@ -73,7 +123,7 @@ static void send_input(uint8_t *last_frame) {
     *last_frame = io[15];
     uint8_t pkt[20] = {'F', 'C', 'I', 'N'};
     memcpy(pkt + 4, io, 16);
-    stdio_put_string((const char *)pkt, sizeof pkt, false, false);
+    write_packet(pkt, sizeof pkt);
 }
 
 static void __attribute__((noreturn)) remote_loop(void) {
@@ -90,12 +140,13 @@ static void __attribute__((noreturn)) remote_loop(void) {
         uint8_t *back;
         while (!(back = cart_remote_back())) {           // 前の 1 枚がまだ表示されていない
             send_input(&last_frame);
+            usb_poll();
             sleep_us(200);
         }
         if (read_exact(back, 15360, 500) != 15360) continue;
         if (read_exact(meta, sizeof meta, 500) != (int)sizeof meta) continue;
         cart_remote_commit(meta, meta + 32, meta[96], meta[97], meta[98]);
-        gpio_xor_mask64(1ull << PIN_LED);                 // 1 枚ごとに LED を反転
+        LED_TOGGLE();                                     // 1 枚ごとに LED を反転
     }
 }
 
@@ -107,7 +158,12 @@ int main(void) {
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_khz(250000, true);
+#if MAGICON_USB_HOST
+    const tusb_rhport_init_t rh = {.role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_AUTO};
+    tusb_rhport_init(0, &rh);           // J6 の C6 を待つ(つながるまでの手続きは usb_poll = tuh_task で進む)
+#else
     stdio_init_all();
+#endif
 
     // 本体がリセットを解く前にバスへ出られるよう、ROM の読み込みは 5V を待つ前に済ませる
     cart_info_t info;
@@ -116,18 +172,24 @@ int main(void) {
         cart_load_fallback(&info);
 
     while (!gpio_get(PIN_FC_5V)) {      // 本体の電源が入るまでバスへ出さない(USB だけの時に逆流させない)
-        gpio_xor_mask64(1ull << PIN_LED);
-        sleep_ms(100);
+        LED_TOGGLE();
+        for (int i = 0; i < 100; i++) {
+            usb_poll();
+            sleep_ms(1);
+        }
         printf("waiting for Famicom 5V (GPIO46)...  ROM: %s\n", err ? err : "ok");
     }
-    gpio_put(PIN_LED, 1);
+    LED_ON();
     cart_start();
     if (!err && info.is_remote)
         remote_loop();                  // 戻らない
 
     uint32_t lc = 0, lp = 0, lw = 0;
     for (;;) {
-        sleep_ms(1000);
+        for (int i = 0; i < 1000; i++) {
+            usb_poll();
+            sleep_ms(1);
+        }
         uint32_t c = stat_cpu, p = stat_ppu, w = stat_wr;
         if (err)
             printf("[test screen] %s | ", err);
