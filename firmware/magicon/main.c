@@ -15,6 +15,7 @@
 #include "hardware/vreg.h"
 #include "hardware/structs/sio.h"
 #include "cart.h"
+#include "audio.h"
 #if MAGICON_USB_HOST
 #include "tusb.h"
 #endif
@@ -25,6 +26,7 @@
 #define LED_TOGGLE()   (sio_hw->gpio_hi_togl = 1u << (PIN_LED - 32))
 #define LED_ON()       (sio_hw->gpio_hi_set = 1u << (PIN_LED - 32))
 #define PIN_CIRAM_A10  43
+#define PIN_AUDIO      44               // PWM → RC → VR1 → R8 → カセット端子 46 番(本体の音声に混ぜる)
 #define PIN_FC_5V      46
 #define BUS_PIN_LAST   42
 #define ROM_SLOT       0x00800000u      // フラッシュ先頭から 8MB(ファームウェアとは重ならない)
@@ -64,6 +66,7 @@ static const char *load_from_flash(cart_info_t *info) {
 // ---- 画面転送モードの USB のやりとり(コア0) ----
 //   PC → カセット: "FCFR" + 絵 15360 + パレット 32 + 属性 64 + カーソル x, y, visible(3)
 //                  絵は裏の画面へ直接読み込む。表示待ちの 1 枚がある間は読まない(PC 側がそこで待たされる)
+//                  "FCAU" + 形式 1(0 = 16 ビット PCM、1 = IMA ADPCM)+ サンプル数 2(LE)+ 中身 = PC の音(32kHz モノラル)
 //   カセット → PC: "FCIN" + パッド 1 + キーボード 9 行 + 予備 5 + 6502 のフレームの数 1(= 16)
 //                  6502 のフレームの数が変わるたびに(約 60 回/秒)
 //   通り道は USB シリアル(magicon、PC 直結)か、USB ホストで開いた C6 の CDC(magicon_wifi)
@@ -128,18 +131,31 @@ static void send_input(uint8_t *last_frame) {
 
 static void __attribute__((noreturn)) remote_loop(void) {
     static uint8_t meta[32 + 64 + 3];
+    static uint8_t au[2 * AUDIO_MAX_SAMPLES];
     uint8_t last_frame = 0, c;
     uint32_t match = 0;
     for (;;) {
         send_input(&last_frame);
-        // "FCFR" を探す(途中から読み始めても合うように 1 バイトずつ)
+        audio_poll();
+        // "FCFR" / "FCAU" を探す(途中から読み始めても合うように 1 バイトずつ)
         if (read_exact(&c, 1, 1) != 1) continue;
         match = (match << 8) | c;
+        if (match == ('F' << 24 | 'C' << 16 | 'A' << 8 | 'U')) {
+            match = 0;
+            uint8_t h[3];
+            if (read_exact(h, 3, 100) != 3) continue;
+            uint16_t n = (uint16_t)(h[1] | h[2] << 8);
+            int len = audio_payload_len(h[0], n);
+            if (len < 0 || read_exact(au, len, 100) != len) continue;
+            audio_push(h[0], n, au);
+            continue;
+        }
         if (match != ('F' << 24 | 'C' << 16 | 'F' << 8 | 'R')) continue;
         match = 0;
         uint8_t *back;
         while (!(back = cart_remote_back())) {           // 前の 1 枚がまだ表示されていない
             send_input(&last_frame);
+            audio_poll();
             usb_poll();
             sleep_us(200);
         }
@@ -181,8 +197,10 @@ int main(void) {
     }
     LED_ON();
     cart_start();
-    if (!err && info.is_remote)
+    if (!err && info.is_remote) {
+        audio_init(PIN_AUDIO);          // PC の音(無音から鳴らし始める)
         remote_loop();                  // 戻らない
+    }
 
     uint32_t lc = 0, lp = 0, lw = 0;
     for (;;) {

@@ -3,6 +3,7 @@ FC-MAGICON 画面転送(リモートデスクトップ)の PC 側。PC の画面
 ファミリーベーシックのキーボード(HVC-007)を PC のキーボードにする。
     python remote_pc.py [--port COM5] [--color] [--fps 30]
     python remote_pc.py --tcp [HOST] [--color]  (Wi-Fi ブリッジ ESP32-C6 経由。HOST を省くと fc-magicon.local、既定 25 fps)
+  PC で鳴っている音も送る(pcaudio.py、32kHz モノラル。USB 直結は 16 ビット、Wi-Fi は 8 ビット)。--no-audio で送らない
     python remote_pc.py --dry-run 60        (カセット無しで、画面の取り込み + 変換の速さだけ測る)
   カセットは load_rom.ps1 -Remote で画面転送モードにしておく。止める時は Ctrl+C。
   使うのは Python に元からあるものと Pillow・numpy だけ(COM ポート・マウス・キーは Windows の API を ctypes で呼ぶ)。
@@ -99,6 +100,7 @@ class IoThread(threading.Thread):
         self.lock = threading.Lock()
         self.rx = bytearray()
         self.pending = None
+        self.audio = []                                  # 音のパケット(画面より先に送る)
         self.error = None
         self.wake = threading.Event()
         self.start()
@@ -107,18 +109,27 @@ class IoThread(threading.Thread):
         try:
             while True:
                 with self.lock:
+                    audio, self.audio = self.audio, []
                     pkt, self.pending = self.pending, None
+                if audio:
+                    self.port.write(b"".join(audio))
                 if pkt is not None:
                     self.port.write(pkt)                 # カセットが前の 1 枚を出すまで、ここで待たされる
                 data = self.port.read()
                 if data:
                     with self.lock:
                         self.rx += data
-                if pkt is None and not data:
+                if pkt is None and not data and not audio:
                     self.wake.wait(0.001)
                     self.wake.clear()
         except OSError as e:
             self.error = e
+
+    def send_audio(self, pkt):
+        with self.lock:
+            if len(self.audio) < 50:                     # 送れずに溜まり過ぎたら捨てる(1 秒くらい)
+                self.audio.append(pkt)
+        self.wake.set()
 
     def ready(self):
         """次の 1 枚を渡せるか(前の 1 枚をスレッドが受け取った)"""
@@ -382,6 +393,10 @@ def main():
                     help="Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ。HOST を省くと fc-magicon.local")
     ap.add_argument("--fps", type=float, help="送る速さの上限(既定: USB 30、Wi-Fi 25。Wi-Fi は 25 までなら遅れ 40ms 前後)")
     ap.add_argument("--dry-run", type=int, metavar="N", help="カセット無しで N 枚取り込んで変換し、速さを表示する")
+    ap.add_argument("--no-audio", action="store_true", help="PC の音を送らない")
+    ap.add_argument("--audio", choices=["pcm16", "pcm8", "adpcm"],
+                    help="音の形式(既定: USB 直結 pcm16 = 64KB/秒、Wi-Fi pcm8 = 32KB/秒。adpcm = 16KB/秒は雑音が多い)")
+    ap.add_argument("--volume", type=float, default=1.0, help="送る音の大きさ(1.0 = そのまま)")
     a = ap.parse_args()
     view = View()
     mode = "color" if a.color else "gray"
@@ -417,6 +432,15 @@ def main():
         port = Port(name)
     print(f"{name} を開いた。{mode}、最大 {a.fps} fps。止める時は Ctrl+C")
     port = IoThread(port)
+    if not a.no_audio:
+        from pcaudio import AudioSender, FORMATS
+        # Wi-Fi は画面の枚数を優先して 8 ビット(聞き比べで 16 ビットより少し震えるが、ADPCM より雑音が少ない。2026-09-27)
+        name = a.audio or ("pcm8" if a.tcp else "pcm16")
+        try:
+            AudioSender(port.send_audio, FORMATS[name], a.volume)
+            print(f"PC の音も送る(32kHz モノラル、{name})。止めるのは --no-audio")
+        except OSError as e:
+            print(f"PC の音を録れない({e})。音無しで続ける")
     rx = b""
     pad_prev, held = 0, 0
     kb = KeyboardBridge(send_scancode)
