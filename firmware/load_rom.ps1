@@ -13,7 +13,7 @@ $bin = Join-Path $env:TEMP "fc-magicon-rom.bin"          # picotool は日本語
 $src = if ($Remote) { "--remote" } else { $Rom }
 python (Join-Path $PSScriptRoot "tools\nes_pack.py") $src $bin
 if ($LASTEXITCODE) { throw "この ROM は magicon ではまだ動かない" }
-& $picotool load -v -t bin -o 0x10800000 $bin -f
+& $picotool load -v $bin -t bin -o 0x10800000 -f          # -t / -o はファイル名の後に書く(前だと picotool 2.x が受け付けない)
 if ($LASTEXITCODE) {
     Write-Warning "書き込めなかった。BOOTSEL を押したまま RESET を押して離し、もう一度実行する。"
     exit 1

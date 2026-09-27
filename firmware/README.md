@@ -132,7 +132,12 @@ python tools/remote_pc.py --dry-run 30   # カセット無しで、画面の取�
 
 - 使うのは Python に元からあるものと Pillow・numpy だけ(COM ポート・画面の取り込み・マウスとキーは Windows の API を ctypes で呼ぶ)。
 - 入力が 0.5 秒届かない時(ケーブルが抜けた等)と止めた時は、押しっぱなしのキーとボタンを離す。
-- PC 側の速さ(2026-09-27、この PC): 等倍 約 60fps、画面全体 灰色 約 30fps / カラー 約 23fps。実際は USB の速さで決まる(実機で測る)。
+- PC 側の速さ(2026-09-27、この PC): 等倍 約 60fps、画面全体 灰色 約 30fps / カラー 約 23fps。
+- USB の速さ(2026-09-27、Core2350B2 単体に `usb_test.uf2`): `tools/usb_bench.py` で 614KB/秒 = 最大 40.6 枚/秒(150 枚すべて届く)。
+  `remote_pc.py` をそのまま流して 灰色 29.8 / カラー 20.0 枚/秒(PC 側で画面を作る速さで決まる)。
+  はじめは画面を作る → 送るを順番にやっていて 15 枚/秒しか出なかったので、送受信を別スレッド(`IoThread`)にした。
+- `usb_test/`: ファミコン無しで USB の速さを測るファームウェア。画面転送モードと同じ読み方で受け取って捨て、FCIN を 60 回/秒返す
+  (何も押していない。予備の 2 バイトに受け取った枚数)。
 
 - PPU が背景のパターンを読みに来るたびに、その位置の 8 ドットを RP2350 が返す(ネームテーブルは「行 % 8 * 32 + 列」の並びにし、
   読みに来たタイル番号と行の中の y から位置を割り出す。8 行ごとの組は、タイル行が 7 → 0 になる回数で数える)。
@@ -143,6 +148,36 @@ python tools/remote_pc.py --dry-run 30   # カセット無しで、画面の取�
 - `tools/nesframe.py`: PC の画像を 1 枚にする(灰色 4 階調 / カラー。色の近さは CIELAB で測る)。
 - `sim/test_remote.py`: PC の試験台で、届いた絵がファミコンの画面にドット単位でそのまま出るか(灰色・カラーとも違い 0)、
   カーソル、パッドとキーボードの読み取りを確かめる。
+
+#### Wi-Fi で送る(ESP32-C6 のブリッジ、作りかけ)
+
+```
+PC ──Wi-Fi(TCP 5000番)── ESP32-C6(wifi_bridge/)──USB── J6 ── RP2350(USB ホスト)
+python tools/remote_pc.py --tcp          # fc-magicon.local(C6 が mDNS で名乗る)へつなぐ。既定 25 fps
+```
+
+- `wifi_bridge/wifi_bridge.ino`: TCP と C6 の USB(Serial/JTAG)の間でバイトを素通しする。TCP がつながるまで USB に IP を出す。
+  Wi-Fi の SSID とパスワードは `wifi_secrets.h`(`wifi_secrets.example.h` を写して書く。GitHub には上げない)。
+  ビルドと書き込みは `pwsh -File wifi_bridge/build_bridge.ps1`(Arduino-ESP32 3.3.12、開発環境は `C:\Users\Yugo\esp`)。
+- 手持ちの C6 N4 ボードは、QIO / 80MHz だとフラッシュの読み出しが化けて起動しない。ブートローダーは DIO / 40MHz、
+  アプリはコンストラクターでフラッシュ(SPI1)を 40MHz に落とす。電源が弱めで、一度ブラウンアウトを繰り返した(USB の挿し直しで直った)。
+- `tools/wifi_bench.py`: PC をカセットの代わりに C6 の USB につなぎ、Wi-Fi → USB の速さと中身を確かめる。
+  2026-09-27 の結果: 最大 462KB/秒 = 30.6 枚/秒。25 枚/秒で送ると 1 枚の遅れは 中央 37ms・最大 81ms、中身の食い違い 0、
+  逆向き(FCIN)も全部届く。`remote_pc.py --tcp` をそのまま流して 灰色 24.5 / カラー 19.9 枚/秒(カラーは PC の変換で決まる)。
+- `host_test/`: RP2350 を USB ホストにして C6 から受け取る試験(ファミコン無し)。`tools/host_bench.py` で測る。
+  2026-09-27 の結果(Core2350B2 単体 + C6、ジャンパー線): **420KB/秒 = 27.8 枚/秒、500 枚すべて届く**。20 枚/秒で送るとそのまま追従。
+  - TinyUSB は **0.21.0** が要る(`C:\Users\Yugo\pico\tinyusb-0.21.0`、build.ps1 が host_test だけこれでビルドする)。
+    pico-sdk 付属の 0.18 は、RP2350 ホストのバルク転送が「割り込み用の窓口」で 1ms に 64 バイト = 64KB/秒止まりで、
+    返事のパケットに受け取ったデータが混ざって化けた。0.21 は EPX を順番に回す作りになっている。
+  - 0.21 と pico-sdk 2.3.1 の組み合わせでは、CDC の受信 FIFO の mutex が初期化されず `tuh_cdc_read` が止まったので、
+    `tusb_config.h` で `CFG_TUSB_OS = OPT_OS_NONE`(と `tusb_time_millis_api`)にした。
+  - `gpio_xor_mask64` / `gpio_put`(RP2350 では GPIO コプロセッサー命令)で LED を触ると NOCP の HardFault で止まったので、
+    LED は SIO のレジスターを直接たたく(magicon では同じ関数で止まっていないので、原因はまだ分かっていない)。
+  - 調べるのに debugprobe(Pico、`debugprobe_on_pico.uf2` v2.3.1)+ xPack OpenOCD 0.12.0-7(`C:\Users\Yugo\pico\openocd`)で SWD を使った。
+    SWD からのリセット(`reset`・ウォッチドッグ)は起動がおかしくなるので、書いた後は電源を入れ直す。
+- **まだ無いもの: magicon の画面転送モードを USB ホストで動かすこと**(C6 の USB は Serial/JTAG でデバイス専用なので、RP2350 がホストになる)。
+  つなぎ方は J6 の 2(D-)→ C6 の GPIO12、3(D+)→ GPIO13、4 → GND。C6 は別の USB 電源で動かす
+  (J6 の VBUS から取ると、Wi-Fi の電流が本体の 5V に乗る)。J6 と FPC の USB に同時に機器をつながない。
 
 ## PC で試す(sim)
 
@@ -186,3 +221,4 @@ sim/sim.exe music.nsf --frames 600 --wav --press "200:R:3" --out DIR   # 画面(
 | `tools/asm6502.py` | テスト ROM 用の小さな 6502 アセンブラ(Python の関数で書く、分岐先を計算する) |
 | `boards/fc_magicon.h` | ボード定義 |
 | `out/*.uf2` | ビルド済みのファームウェア |
+| `wifi_bridge/` | 画面転送の Wi-Fi ブリッジ(ESP32-C6、Arduino)。`tools/wifi_bench.py` で速さを測る |

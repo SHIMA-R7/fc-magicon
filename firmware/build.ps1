@@ -20,6 +20,16 @@ cmake -G Ninja -B build -S . -DCMAKE_BUILD_TYPE=Release `
 if ($LASTEXITCODE) { throw "cmake の設定に失敗" }
 cmake --build build
 if ($LASTEXITCODE) { throw "ビルドに失敗" }
+
+# host_test だけ TinyUSB 0.21.0(C:\Users\Yugo\pico\tinyusb-0.21.0、2026-09-27 に GitHub から導入)でビルドする
+$env:PICO_TINYUSB_PATH = "$root/tinyusb-0.21.0" -replace '\\', '/'
+cmake -G Ninja -B build_host -S . -DCMAKE_BUILD_TYPE=Release -DFC_HOST_TEST=ON `
+    -Dpicotool_DIR="$root/picotool/picotool" -Dpioasm_DIR="$root/pico-sdk-tools/pioasm"
+if ($LASTEXITCODE) { throw "cmake の設定に失敗(host_test)" }
+cmake --build build_host
+if ($LASTEXITCODE) { throw "ビルドに失敗(host_test)" }
+Remove-Item Env:\PICO_TINYUSB_PATH
+Get-ChildItem build_host -Recurse -Filter *.uf2 | Copy-Item -Destination "$PSScriptRoot\out" -Force
 New-Item -ItemType Directory -Force "$PSScriptRoot\out" | Out-Null
 Get-ChildItem build -Recurse -Filter *.uf2 | Copy-Item -Destination "$PSScriptRoot\out" -Force
 Get-ChildItem "$PSScriptRoot\out" | Select-Object Name, Length

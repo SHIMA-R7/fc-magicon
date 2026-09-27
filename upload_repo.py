@@ -24,15 +24,18 @@ INCLUDE = [
     "kicad/FC-MAGICON.net", "kicad/FC-MAGICON.pdf", "kicad/FC-MAGICON.pretty/*",
     "kicad/FC-MAGICON_gerber_r0.2.zip", "images/*.png",
     "firmware/README.md", "firmware/CMakeLists.txt", "firmware/build.ps1", "firmware/boards/*.h",
-    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/magicon/*", "firmware/load_rom.ps1",
+    "firmware/bus_test/*", "firmware/chr_test/*", "firmware/magicon/*", "firmware/usb_test/*", "firmware/host_test/*","firmware/load_rom.ps1",
     "firmware/tools/*.py", "firmware/out/*.uf2",
+    "firmware/wifi_bridge/wifi_bridge.ino", "firmware/wifi_bridge/wifi_secrets.example.h", "firmware/wifi_bridge/build_bridge.ps1",
+    "docs/build_manual.py", "docs/user_manual_body.md", "docs/user_manual.md", "docs/user_manual.pdf",
     "firmware/sim/*.c", "firmware/sim/*.h", "firmware/sim/*.py", "firmware/sim/*.ps1", "firmware/sim/agnes/*",
     "3d/*.py", "3d/*.step", "kicad/3d/*.step",
     "case/*.py", "case/parts.json", "case/label/*.py", "case/label/*.ps1", "case/label/label.png",   # label_print.png(印刷用、大きい)は作り直せるので上げない
 ]
 # case/inspect/ はシェル(printables 860420)の断面図なので上げない。シェルの STEP 自体もリポジトリに無い
 EXCLUDE = ["kicad/*.pass*.kicad_pcb", "kicad/*.before_*.kicad_pcb", "kicad/__pycache__/*", "kicad/_step_tmp*",
-           "firmware/sim/agnes_magicon.c"]   # patch_agnes.py が作るもの
+           "firmware/sim/agnes_magicon.c",   # patch_agnes.py が作るもの
+           "firmware/wifi_bridge/wifi_secrets.h"]   # Wi-Fi のパスワード(念のため INCLUDE に無くても除く)
 
 
 def api(path, method="GET", body=None, repo_path=True):

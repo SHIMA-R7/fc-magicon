@@ -2,6 +2,7 @@
 FC-MAGICON 画面転送(リモートデスクトップ)の PC 側。PC の画面をファミコンに映し、1コンをマウス、
 ファミリーベーシックのキーボード(HVC-007)を PC のキーボードにする。
     python remote_pc.py [--port COM5] [--color] [--fps 30]
+    python remote_pc.py --tcp [HOST] [--color]  (Wi-Fi ブリッジ ESP32-C6 経由。HOST を省くと fc-magicon.local、既定 25 fps)
     python remote_pc.py --dry-run 60        (カセット無しで、画面の取り込み + 変換の速さだけ測る)
   カセットは load_rom.ps1 -Remote で画面転送モードにしておく。止める時は Ctrl+C。
   使うのは Python に元からあるものと Pillow・numpy だけ(COM ポート・マウス・キーは Windows の API を ctypes で呼ぶ)。
@@ -16,8 +17,10 @@ import argparse
 import ctypes
 import ctypes.wintypes as wt
 import os
+import socket
 import struct
 import sys
+import threading
 import time
 import winreg
 
@@ -58,6 +61,81 @@ class Port:
         done = wt.DWORD()
         if not kernel32.WriteFile(self.h, data, len(data), ctypes.byref(done), None) or done.value != len(data):
             raise OSError("書き込みが止まった(カセットが受け取っていない?)")
+
+
+class TcpPort:
+    """Wi-Fi ブリッジ(ESP32-C6、firmware/wifi_bridge)へ TCP でつなぐ。Port と同じく read は来ている分だけ、write は全部送る"""
+    def __init__(self, host, port=5000):
+        self.s = socket.create_connection((host, port), timeout=5)
+        self.s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.s.settimeout(2)                            # 書き込みは 2 秒で打ち切る(Port と同じ)
+
+    def read(self, n=4096):
+        self.s.setblocking(False)
+        try:
+            data = self.s.recv(n)
+            if not data:
+                raise OSError("Wi-Fi ブリッジが接続を切った")
+            return data
+        except BlockingIOError:
+            return b""
+        finally:
+            self.s.settimeout(2)
+
+    def write(self, data):
+        try:
+            self.s.sendall(data)
+        except socket.timeout:
+            raise OSError("書き込みが止まった(カセットが受け取っていない?)")
+
+
+class IoThread(threading.Thread):
+    """COM / TCP の読み書きを別スレッドでやる。画面を作っている間に前の 1 枚を送る
+    (順番にやると 1 枚 = 作る 33ms + USB へ送る 25ms になり、USB 直結で 15 fps しか出なかった。2026-09-27)。
+    読み書きを同じスレッドにまとめるのは、Win32 の COM のハンドルは読みと書きが互いに待ち合うため"""
+    def __init__(self, port):
+        super().__init__(daemon=True)
+        self.port = port
+        self.lock = threading.Lock()
+        self.rx = bytearray()
+        self.pending = None
+        self.error = None
+        self.wake = threading.Event()
+        self.start()
+
+    def run(self):
+        try:
+            while True:
+                with self.lock:
+                    pkt, self.pending = self.pending, None
+                if pkt is not None:
+                    self.port.write(pkt)                 # カセットが前の 1 枚を出すまで、ここで待たされる
+                data = self.port.read()
+                if data:
+                    with self.lock:
+                        self.rx += data
+                if pkt is None and not data:
+                    self.wake.wait(0.001)
+                    self.wake.clear()
+        except OSError as e:
+            self.error = e
+
+    def ready(self):
+        """次の 1 枚を渡せるか(前の 1 枚をスレッドが受け取った)"""
+        return self.pending is None
+
+    def send(self, pkt):
+        with self.lock:
+            self.pending = pkt
+        self.wake.set()
+
+    def read(self):
+        if self.error:
+            raise self.error
+        with self.lock:
+            data = bytes(self.rx)
+            self.rx.clear()
+        return data
 
 
 def find_port():
@@ -300,7 +378,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
     ap.add_argument("--color", action="store_true", help="カラー(既定は灰色 4 階調。文字が読みやすい)")
-    ap.add_argument("--fps", type=float, default=30)
+    ap.add_argument("--tcp", nargs="?", const="fc-magicon.local", metavar="HOST",
+                    help="Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ。HOST を省くと fc-magicon.local")
+    ap.add_argument("--fps", type=float, help="送る速さの上限(既定: USB 30、Wi-Fi 25。Wi-Fi は 25 までなら遅れ 40ms 前後)")
     ap.add_argument("--dry-run", type=int, metavar="N", help="カセット無しで N 枚取り込んで変換し、速さを表示する")
     a = ap.parse_args()
     view = View()
@@ -322,11 +402,21 @@ def main():
             print(f"{vm:4} {mode}: 1 枚 {dt * 1000:.1f}ms(取り込み {tg / a.dry_run * 1000:.1f}ms)= 最大 {1 / dt:.1f} fps")
         return
 
-    name = a.port or (find_port() or [None])[0]
-    if not name:
-        sys.exit("magicon の USB シリアル(COM ポート)が見つからない。--port COMx で指定する")
-    port = Port(name)
+    if a.tcp:
+        a.fps = a.fps or 25
+        try:
+            port = TcpPort(a.tcp)
+        except OSError as e:
+            sys.exit(f"Wi-Fi ブリッジ {a.tcp} につながらない({e})。C6 の電源と Wi-Fi を確認する")
+        name = f"{a.tcp}(Wi-Fi)"
+    else:
+        a.fps = a.fps or 30
+        name = a.port or (find_port() or [None])[0]
+        if not name:
+            sys.exit("magicon の USB シリアル(COM ポート)が見つからない。--port COMx で指定する")
+        port = Port(name)
     print(f"{name} を開いた。{mode}、最大 {a.fps} fps。止める時は Ctrl+C")
+    port = IoThread(port)
     rx = b""
     pad_prev, held = 0, 0
     kb = KeyboardBridge(send_scancode)
@@ -386,11 +476,11 @@ def main():
                 kb.update(kb_pressed(io[1:10]))                                            # キーボード
             # ---- 画面 ----
             now = time.perf_counter()
-            if now >= next_t:
+            if now >= next_t and port.ready():
                 next_t = now + 1 / a.fps
                 img, cur = view.grab()
                 prev = encode(img, mode, prev=prev if mode == "color" else None, iters=2 if prev else 4)   # 組は前の画面から探す(チラつき防止)
-                port.write(frame_packet(prev, cur))   # カセットが前の 1 枚を出すまで、ここで待たされる
+                port.send(frame_packet(prev, cur))    # 送るのは IoThread(その間に次の 1 枚を作る)
                 sent += 1
                 if sent % 100 == 0:
                     print(f"{sent} 枚、{sent / (time.perf_counter() - t_start):.1f} fps")
