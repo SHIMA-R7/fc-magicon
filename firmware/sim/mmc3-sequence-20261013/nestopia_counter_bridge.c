@@ -23,6 +23,7 @@ void fc_mmc3_frame(uint64_t cycles){fc_epoch+=cycles;}
 // Diagnostic model: in-place expansion of one 1KiB slot takes a configured time.
 #include <stdlib.h>
 #include <stdio.h>
+#include "../../magicon/remote_position.h"
 static uint8_t fc_chr_cache[8192];
 static const uint8_t *fc_desired[8],*fc_cached[8],*fc_batch[8];
 static bool fc_valid[8],fc_copying;
@@ -64,6 +65,9 @@ void fc_chr_bank(unsigned address,const uint8_t*source,uint64_t cycle){
  fc_chr_service(now);
 }
 static int remote_scanline;
+static remote_position remote_pos;
+static int remote_use_nametable=-1;
+void fc_remote_nametable(unsigned address){remote_position_name(&remote_pos,(uint16_t)address);}
 static int remote_mode=-1;
 static uint8_t remote_frame[15360];
 __declspec(dllexport) void fc_remote_frame(const uint8_t *frame){
@@ -80,6 +84,11 @@ unsigned fc_chr_read(unsigned address,unsigned native,uint64_t cycle){
   }
  }
  if(remote_mode && !(address&0x1000)){
+  if(remote_use_nametable==-1)remote_use_nametable=getenv("FC_REMOTE_NAMETABLE")!=NULL;
+  if(remote_use_nametable){
+   uint16_t offset;
+   return remote_position_byte(&remote_pos,(uint16_t)address,&offset)?remote_frame[offset]:native;
+  }
   unsigned tile=address>>4,trow=tile>>5;
   unsigned line=remote_scanline<0||remote_scanline>=240?0:(unsigned)remote_scanline;
   unsigned group=line/64;

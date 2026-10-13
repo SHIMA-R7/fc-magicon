@@ -125,17 +125,18 @@
  			NST_FORCE_INLINE void UpdateDecay(byte);
 --- a/source/core/NstPpu.cpp
 +++ b/source/core/NstPpu.cpp
-@@ -27,6 +27,9 @@
+@@ -27,6 +27,10 @@
  #include "NstPpu.hpp"
  #include "NstState.hpp"
  
 +extern "C" unsigned fc_chr_read(unsigned,unsigned,unsigned long long);
 +extern "C" void fc_remote_scanline(int);
++extern "C" void fc_remote_nametable(unsigned);
 +
  namespace Nes
  {
  	namespace Core
-@@ -752,6 +755,12 @@
+@@ -752,6 +756,12 @@
  			return (*this)[3][address];
  		}
  
@@ -148,7 +149,15 @@
  		NST_FORCE_INLINE uint Ppu::Chr::FetchPattern(uint address) const
  		{
  			return accessor.Fetch( address & 0x1FFF );
-@@ -836,13 +845,13 @@
+@@ -759,6 +769,7 @@
+ 
+ 		NST_FORCE_INLINE uint Ppu::Nmt::FetchName(uint address) const
+ 		{
++            fc_remote_nametable(address);
+ 			return accessors[address >> 10 & 0x3].Fetch( address & 0x3FF );
+ 		}
+ 
+@@ -836,13 +847,13 @@
  
  		NST_FORCE_INLINE uint Ppu::FetchSpPattern()
  		{
@@ -164,7 +173,7 @@
  			io.busData = pattern;
  
  			tiles.pattern[1] = pattern >> 0 & 0x55;
-@@ -851,7 +860,7 @@
+@@ -851,7 +862,7 @@
  
  		NST_FORCE_INLINE void Ppu::FetchBgPattern1()
  		{
@@ -173,7 +182,7 @@
  			io.busData = pattern;
  
  			tiles.fetched = 1;
-@@ -1351,7 +1360,7 @@
+@@ -1351,7 +1362,7 @@
  			*/
  			if (!rendering)
  			{
@@ -182,7 +191,7 @@
  			}
  			else
  			{
-@@ -1362,7 +1371,7 @@
+@@ -1362,7 +1373,7 @@
  
  				const uint bus = (io.address & 0x3F00) | io.octalLatch;
  
@@ -191,7 +200,7 @@
  				io.busData = io.buffer;
  
  				UpdateVramAddress();
-@@ -2004,8 +2013,8 @@
+@@ -2004,8 +2015,8 @@
  
  				const uint patterns[2] =
  				{

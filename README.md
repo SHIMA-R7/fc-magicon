@@ -14,6 +14,7 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 - **修正**：MMC3リロード要求の世代管理、リモートのタイル番号保持、12ドットカーソル、マウス感度半減、音声を映像の間に送れる任意の分割プロトコル。
 - **未解決**：実機のPPU位置検出・応答期限、タイル圧縮の画質低下と8フレームNT更新中の混在、実機のMMC3 IRQ/CHR更新、カラー・音声・動画の安定性。
 - 検証記録：[MMC3](docs/mmc3_sequence_validation_20261013.md)、[動画・音声](docs/remote_video_audio_validation_20261013.md)、[PVの30秒検証](docs/youtube_transfer_30s_20261013.md)。ゲームROMや動画素材は公開しない。
+- [先例を参考にした最適化](docs/reference_optimization_20261013.md)：PCのカラー変換を画素同一のまま平均26.9ms→14.8msへ短縮。ネームテーブル/CHRアドレスだけからの位置検出もエミュで確認（実機のDMA経路への接続はまだ）。同じPVを再検証済み。
 - 未書込みの実験版：[分割受信・小カーソルのUF2](firmware/out-direct-pio-diagnostic/magicon-remote-full-smallcursor-chunked.uf2)。`remote_pc.py --chunked` はこの新受信ファーム専用。従来プロトコルは引き続き使用できる。
 
 ## 基板と既存機能

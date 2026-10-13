@@ -17,6 +17,7 @@ PC の画像を、magicon の画面転送モードの 1 枚(256 x 240、2 ビッ
 import os
 import re
 import struct
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -65,6 +66,22 @@ def _luts():
 
 
 NEAR_LUT, LAB_LUT = _luts()
+
+# PC-side lookup: keep the exact Lab metric, but avoid recalculating distances
+# for every pixel of every frame. About 16MiB, plus at most 4MiB of palette LUTs.
+# Prepared once at startup; it is never stored in the RP2350 framebuffer.
+def _color_distance_lut():
+    distances = np.empty((32768,64),dtype=np.float64)
+    for start in range(0,32768,1024):
+        distances[start:start+1024] = ((LAB_LUT[start:start+1024,None,:] - NES_LAB[None,:,:]) ** 2).sum(-1)
+    return distances
+
+COLOR_DISTANCE_LUT = _color_distance_lut()
+
+@lru_cache(maxsize=32)
+def _palette_pixel_lut(palette):
+    options = np.array(palette,dtype=np.intp).reshape(4,4)
+    return COLOR_DISTANCE_LUT[:,options].argmin(-1).T.astype(np.uint8)
 
 
 class Frame:
@@ -267,14 +284,8 @@ def encode(img, mode="gray", iters=4, dither=None, smooth=None, prev=None, _bg_m
         ad = np.clip(a + (BAYER * DITHER_RGB)[..., None], 0, 255).astype(np.int32)
         al = LAB_LUT[((ad[..., 0] >> 3) << 10) | ((ad[..., 1] >> 3) << 5) | (ad[..., 2] >> 3)]
     bp = np.repeat(np.repeat(choice, 16, 0), 16, 1)
-    idx = np.zeros((240, 256), dtype=np.int32)
-    best = np.full((240, 256), np.inf)
-    for j in range(4):
-        cj = np.array([pal[k * 4 + j] for k in range(4)])[bp]  # この点の組の j 番目の色
-        e = ((al - NES_LAB[cj]) ** 2).sum(-1)
-        better = e < best
-        idx[better] = j
-        best[better] = e[better]
+    pixel_q = (((ad[...,0] >> 3) << 10) | ((ad[...,1] >> 3) << 5) | (ad[...,2] >> 3)) if dither else q
+    idx = _palette_pixel_lut(tuple(pal[:16]))[bp,pixel_q].astype(np.int32)
     fr = Frame(idx, pal, attr_of(choice))
     fr.pals = pals
     return fr

@@ -15,14 +15,14 @@ def video(name,frames,size,scale):
  p=subprocess.Popen(cmd,stdin=subprocess.PIPE,stderr=subprocess.PIPE)
  for frame in frames:p.stdin.write(np.asarray(frame,dtype=np.uint8).tobytes())
  p.stdin.close();err=p.stderr.read();assert p.wait()==0,err.decode(errors='replace')
-video('transferred-30s.mp4',native,(256,240),(768,720))
+video('transferred-30s-optimized.mp4',native,(256,240),(768,720))
 font=ImageFont.truetype('C:/Windows/Fonts/consola.ttf',14)
 def comparison():
  for source,shown in zip(original,native):
   image=Image.new('RGB',(512,264));image.paste(Image.fromarray(source),(0,24));image.paste(Image.fromarray(shown),(256,24))
   d=ImageDraw.Draw(image);d.text((5,4),'SOURCE / 0-30 SECONDS',font=font,fill='white');d.text((260,4),'NESTOPIA / COLOR TRANSFER',font=font,fill='white')
   yield image
-video('comparison-30s.mp4',comparison(),(512,264),(1024,528))
+video('comparison-30s-optimized.mp4',comparison(),(512,264),(1024,528))
 for i in [150,300,600]:Image.fromarray(native[i]).resize((768,720),Image.Resampling.NEAREST).save(out/f'frame-{i//30:02}s.png')
-(out/'validation-results.json').write_text(json.dumps({'source_frames':900,'displayed_frames':1800,'rgb_pixel_errors':0,'test_type':'ideal full framebuffer Nestopia core; no real cartridge or real network','audio':'actual PCM16 packet encoder/C decoder + 10-bit PWM quantization; no real analog output'},indent=2))
+(out/'validation-results-optimized.json').write_text(json.dumps({'source_frames':900,'displayed_frames':1800,'rgb_pixel_errors':0,'test_type':'full framebuffer Nestopia core; nametable/CHR address position decoder; no real cartridge or real network','audio':'actual PCM16 packet encoder/C decoder + 10-bit PWM quantization; no real analog output'},indent=2))
 print('PASS 900 source / 1800 displayed frames, no RGB errors; two 30-second MP4s written')
