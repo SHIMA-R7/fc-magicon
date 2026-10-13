@@ -10,19 +10,32 @@
 ;   ループ 1 周 = 2 命令(250MHz で 8ns)なので、渡す値は /RD が下がる 8ns 以内に読んだもの。
 .program ppu_chr
 .wrap_target
+start:
     wait 1 pin 14           ; /RD = High(アドレスの時間)
 sample:
-    mov x, pins             ; AD0-7・A8-12・A13 を読む
+    mov y, isr              ; retain the older address sample, before data takeover
+    mov isr, pins
     jmp pin sample          ; /RD が High のうちは読み続ける
-    mov isr, x              ; /RD が下がった: 直前に読んだ値を渡す
+    mov isr, y
     push noblock
-    pull block              ; コアの答え(データ8bit + 方向8bit)
+poll:
+    jmp pin expired
+    mov x, null
+    pull noblock
+    mov y, osr
+    jmp !y poll
+    jmp pin discard
     out pins, 8             ; AD0-7 にデータ
     out pindirs, 8          ; 0xFF = 出す / 0x00 = 出さない(A13 = 1 のネームテーブルなど)
     wait 1 pin 14           ; /RD が上がったら
     mov osr, null
     out pindirs, 8          ; バスを放す
 .wrap
+expired:
+    pull block              ; 回収するまで入力方向を維持
+discard:
+    irq nowait 0            ; 少なくとも1件の期限超過を診断用に記録
+    jmp start               ; 古いデータを出さず次のアドレス時間へ
 
 % c-sdk {
 static inline void ppu_chr_program_init(PIO pio, uint sm, uint offset) {
@@ -35,6 +48,6 @@ static inline void ppu_chr_program_init(PIO pio, uint sm, uint offset) {
         pio_gpio_init(pio, i);
     pio_sm_set_consecutive_pindirs(pio, sm, 26, 8, false);
     pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
+    // Caller enables only after the serving core is ready.
 }
 %}

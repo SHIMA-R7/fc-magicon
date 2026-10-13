@@ -6,11 +6,22 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 - NSF 再生(バンク切り替え・WRAM 対応。拡張音源は PWM で46番に混ぜる)
 - PC→FC 画面転送(PPU の読み出しに直接応答する FC-PICO 方式)
 
-## 現状(2026-09-26)
+## 現状(2026-10-13)
 
-- **基板 rev0.2 の設計が完了(2層、DRC エラー0・未接続0)。未発注・未実装。**
+- **実機確認**：NEWファミコンで診断画像、F1 Race、スーパーマリオブラザーズが動作。SMB1はユーザーが1-2までプレイし問題なし。MMC3のマリオ3は遊べる段階まで進んだが、下部表示の化けが残る。
+- **リモート表示**：実機でPC画面の灰色・全画面表示を確認。高画質カラー・動画・音声の同時動作はまだ実機未確認。
+- **オフライン検証**：MMC3のIRQテストと同一入力3,900フレームの比較、カラー動画の連続表示、実際のC音声リングを使った通信負荷試験を追加。エミュから描画位置を得る試験は、実機の成功を保証しない。
+- **修正**：MMC3リロード要求の世代管理、リモートのタイル番号保持、12ドットカーソル、マウス感度半減、音声を映像の間に送れる任意の分割プロトコル。
+- **未解決**：実機のPPU位置検出・応答期限、タイル圧縮の画質低下と8フレームNT更新中の混在、実機のMMC3 IRQ/CHR更新、カラー・音声・動画の安定性。
+- 検証記録：[MMC3](docs/mmc3_sequence_validation_20261013.md)、[動画・音声](docs/remote_video_audio_validation_20261013.md)、[PVの30秒検証](docs/youtube_transfer_30s_20261013.md)。ゲームROMや動画素材は公開しない。
+- 未書込みの実験版：[分割受信・小カーソルのUF2](firmware/out-direct-pio-diagnostic/magicon-remote-full-smallcursor-chunked.uf2)。`remote_pc.py --chunked` はこの新受信ファーム専用。従来プロトコルは引き続き使用できる。
+
+## 基板と既存機能
+
+- **基板 rev0.2 の設計が完了(2層、DRC エラー0・未接続0)。発注済み（2026-10-10 ユーザー確認）。**
+- 発注後の保護対策: [対策・後付け回路・検証手順](docs/post_order_protection.md)。保護版ファームは `firmware/out-protected/`。現物での電源・バス波形検証は未実施。
 - ファームウェア: 動作確認用の `bus_test`(CPU バスでテスト ROM を返して音を鳴らす)と `chr_test`(PPU に CHR を返して画面に格子模様を出す)、
-  マジコン本体の `magicon`(.nes を動かす。NROM/MMC1/UxROM/CNROM/MMC3/AxROM、PRG + CHR 384KB まで)を作成、ビルド済み。未実機。[`firmware/`](firmware/README.md)
+  マジコン本体の `magicon`(.nes を動かす。NROM/MMC1/UxROM/CNROM/MMC3/AxROM、PRG + CHR 384KB まで)を作成、ビルド済み。各モードの実機確認範囲は上記を参照。[`firmware/`](firmware/README.md)
 - rev0.1 からの変更: USB の予備ランド(J6)、拡張音源の音量用の半固定抵抗 VR1(KOA KVSF637AC104)を追加、
   電源・音声の配線を太くした(+5V 0.8mm、VBUS 0.6mm、GND 0.5mm、+3V3 0.4mm、音声 0.4mm)、J5 の 12〜14番を GND に。
 - ガーバー: [`kicad/FC-MAGICON_gerber_r0.2.zip`](kicad/FC-MAGICON_gerber_r0.2.zip)(発注の指定は下の「基板の発注」)
@@ -45,7 +56,7 @@ KiCad 10、Freerouting 2.4.1 を使用。KiCad の Python(pcbnew)で実行する
 
 ## ライセンス
 
-MIT(`LICENSE`)。外形の参考にしたデータ(下記「カセット外形の参考データ」)はこのリポジトリに含めていない。
+独自コードはMIT(`LICENSE`)。第三者のエミュレーターや検証用パッチはそれぞれのライセンスに従う。[第三者コードと検証コア](firmware/sim/THIRD_PARTY.md)を参照。外形の参考にしたデータ(下記「カセット外形の参考データ」)はこのリポジトリに含めていない。
 
 ## ピン割り当て
 

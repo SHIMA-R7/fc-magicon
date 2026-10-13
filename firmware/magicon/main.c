@@ -9,6 +9,7 @@
 //     J6 につないだ ESP32-C6(firmware/wifi_bridge、USB Serial/JTAG = CDC)とやりとりする(PC とは Wi-Fi 越し)。
 //     この時は USB シリアル(printf)も picotool の自動書き込みモードも無い。TinyUSB 0.21 が要る(build.ps1)
 #include <stdio.h>
+#include "../power_guard.h"
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
@@ -16,7 +17,13 @@
 #include "hardware/structs/sio.h"
 #include "hardware/watchdog.h"
 #include "cart.h"
+extern volatile uint32_t diag_first_cpu, diag_marks, diag_mark_errors, diag_service_max, diag_service_count;
+extern volatile uint32_t diag_last_cpu_header;
+extern volatile uint32_t diag_error_count, diag_errors[8][5];
+extern volatile uint32_t diag_trace_count, diag_trace_mark, diag_trace[16][2];
+extern volatile uint32_t diag_ppu_service_max, diag_ppu_service_count;
 #include "audio.h"
+#include "remote_chunk.h"
 #if MAGICON_USB_HOST
 #include "tusb.h"
 #endif
@@ -59,22 +66,6 @@ static void reboot_with_pick(uint32_t pick) {
     watchdog_hw->scratch[0] = pick;
     watchdog_reboot(0, 0, 0);
     for (;;) tight_loop_contents();
-}
-
-// 本体の電源が切れたら(5V が 50ms 続けて無い)再起動する: 次に電源を入れた時はメニューから
-static void check_power(void) {
-    static bool low;
-    static absolute_time_t since;
-    if (gpio_get(PIN_FC_5V)) {
-        low = false;
-        return;
-    }
-    if (!low) {
-        low = true;
-        since = get_absolute_time();
-    } else if (absolute_time_diff_us(since, get_absolute_time()) > 50000) {
-        reboot_with_pick(0);
-    }
 }
 
 static const char *load_entry(const lib_entry_t *e, cart_info_t *info) {
@@ -141,6 +132,7 @@ static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
     int got = 0;
     absolute_time_t until = make_timeout_time_ms(timeout_ms);
     while (got < len) {
+        audio_poll();
         tuh_task();
         if (cdc != 0xFF) {
             uint32_t n = tuh_cdc_read(cdc, buf + got, (uint32_t)(len - got));
@@ -165,8 +157,12 @@ static int read_exact(uint8_t *buf, int len, uint32_t timeout_ms) {
     int got = 0;
     absolute_time_t until = make_timeout_time_ms(timeout_ms);
     while (got < len) {
-        int n = stdio_get_until((char *)buf + got, len - got, until);
-        if (n <= 0) return got;         // PICO_ERROR_TIMEOUT
+        audio_poll();
+        if (time_reached(until)) return got;
+        absolute_time_t slice = make_timeout_time_ms(1);
+        if (absolute_time_diff_us(slice, until) < 0) slice = until;
+        int n = stdio_get_until((char *)buf + got, len - got, slice);
+        if (n <= 0) continue;
         got += n;
     }
     return got;
@@ -190,15 +186,48 @@ static void send_input(uint8_t *last_frame) {
 static void __attribute__((noreturn)) remote_loop(void) {
     static uint8_t meta[32 + 64 + 3];
     static uint8_t au[2 * AUDIO_MAX_SAMPLES];
+    static uint8_t chunk[REMOTE_CHUNK_BYTES];
+    static remote_chunk_state chunk_state;
+    uint8_t *chunk_back = NULL;
     uint8_t last_frame = 0, c;
     uint32_t match = 0;
+    uint32_t report_at=time_us_32();
     for (;;) {
+        if((uint32_t)(time_us_32()-report_at)>=1000000u) {
+            report_at=time_us_32();
+            printf("REMOTE timing: CPU_late=%lu PPU_late=%lu CPU_pc=%u PPU_pc=%u\n",
+                (unsigned long)(pio0->irq&1),(unsigned long)(pio1->irq&1),
+                pio_sm_get_pc(pio0,0),pio_sm_get_pc(pio1,0));
+        }
         send_input(&last_frame);
         audio_poll();
-        check_power();
         // "FCFR" / "FCAU" を探す(途中から読み始めても合うように 1 バイトずつ)
         if (read_exact(&c, 1, 1) != 1) continue;
         match = (match << 8) | c;
+        if (match == ('F' << 24 | 'C' << 16 | 'C' << 8 | 'H')) {
+            match = 0;
+            uint8_t h[4];
+            if (read_exact(h, 4, 100) != 4) { chunk_state.received=0; chunk_back=NULL; continue; }
+            uint16_t offset=(uint16_t)(h[0] | h[1]<<8), length=(uint16_t)(h[2] | h[3]<<8);
+            if (!length || length>REMOTE_CHUNK_BYTES || (uint32_t)offset+length>REMOTE_FRAME_BYTES) {
+                chunk_state.received=0; chunk_back=NULL; continue;
+            }
+            if (read_exact(chunk,length,100)!=length) { chunk_state.received=0; chunk_back=NULL; continue; }
+            if (!offset) {
+                chunk_state.received=0;
+                while (!(chunk_back=cart_remote_back())) {
+                    send_input(&last_frame); audio_poll(); usb_poll(); sleep_us(200);
+                }
+            }
+            int complete=remote_chunk_accept(&chunk_state,chunk_back,offset,length,chunk);
+            if (complete<0) chunk_back=NULL;
+            if (complete>0) {
+                uint8_t *m=chunk_state.meta;
+                cart_remote_commit(m,m+32,m[96],m[97],m[98]);
+                chunk_state.received=0; chunk_back=NULL; LED_TOGGLE();
+            }
+            continue;
+        }
         if (match == ('F' << 24 | 'C' << 16 | 'A' << 8 | 'U')) {
             match = 0;
             uint8_t h[3];
@@ -211,6 +240,7 @@ static void __attribute__((noreturn)) remote_loop(void) {
         }
         if (match != ('F' << 24 | 'C' << 16 | 'F' << 8 | 'R')) continue;
         match = 0;
+        chunk_state.received=0; chunk_back=NULL;
         uint8_t *back;
         while (!(back = cart_remote_back())) {           // 前の 1 枚がまだ表示されていない
             send_input(&last_frame);
@@ -226,6 +256,7 @@ static void __attribute__((noreturn)) remote_loop(void) {
 }
 
 int main(void) {
+    uint64_t boot_us = time_us_64();
     bus_pins_input();
     gpio_init(PIN_LED);
     gpio_set_dir(PIN_LED, GPIO_OUT);
@@ -233,29 +264,55 @@ int main(void) {
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_khz(250000, true);
-#if MAGICON_USB_HOST
-    const tusb_rhport_init_t rh = {.role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_AUTO};
-    tusb_rhport_init(0, &rh);           // J6 の C6 を待つ(つながるまでの手続きは usb_poll = tuh_task で進む)
-#else
-    stdio_init_all();
-#endif
 
     // 本体がリセットを解く前にバスへ出られるよう、ROM の読み込みは 5V を待つ前に済ませる
     cart_info_t info;
     const char *err = load_from_flash(&info);
+#if FC_DIAGNOSTIC && !FC_DIAG_NROM_GAME
+    // Use the built-in synthetic test ROM; leave flash ROM slot untouched.
+    err = "diagnostic built-in test ROM";
+#endif
     if (err)
         cart_load_fallback(&info);
+    uint64_t prepared_us = time_us_64();
+#if !MAGICON_USB_HOST
+    // Keep standalone USB/picotool available while waiting for FC power.
+    // A cold start with FC already on prioritizes bus service instead.
+    bool usb_prepared = !gpio_get(PIN_FC_5V);
+    if (usb_prepared) stdio_init_all();
+#endif
 
-    while (!gpio_get(PIN_FC_5V)) {      // 本体の電源が入るまでバスへ出さない(USB だけの時に逆流させない)
+#if FC_DIAG_SPLIT
+    // Report preserved results repeatedly while power is OFF and USB is alive.
+    while (!gpio_get(PIN_FC_5V)) {
+        if (watchdog_hw->scratch[1] == 0x53504C54u)
+            printf("SPLIT RESULT V5 constantFF: cpu=%lu ppu=%lu marks=%lu errors_low16=%lu pc=%04lx ppu_handler_max_cycles=%lu had_PPU_miss=%lu RD_low_ticks_min=%lu max=%lu (tick=8ns,255=overflow)\n",
+                (unsigned long)watchdog_hw->scratch[2], (unsigned long)watchdog_hw->scratch[3],
+                (unsigned long)watchdog_hw->scratch[7], (unsigned long)(watchdog_hw->scratch[5]&0xFFFF),
+                (unsigned long)(watchdog_hw->scratch[6]&0xFFFF), (unsigned long)((watchdog_hw->scratch[6]>>16)&0x7FFF), (unsigned long)(watchdog_hw->scratch[6]>>31),
+                (unsigned long)((watchdog_hw->scratch[5]>>16)&255), (unsigned long)(watchdog_hw->scratch[5]>>24));
+        // A brief poll keeps power detection prompt even between result prints.
+        for (int i=0; i<1000 && !gpio_get(PIN_FC_5V); i++) sleep_ms(1);
         LED_TOGGLE();
-        for (int i = 0; i < 100; i++) {
-            usb_poll();
-            sleep_ms(1);
-        }
-        printf("waiting for Famicom 5V (GPIO46)...  ROM: %s\n", err ? err : "ok");
     }
+#else
+    fc_wait_power();
+#endif
+    fc_arm_power_guard();
     LED_ON();
+#if FC_DIAGNOSTIC && !MAGICON_USB_HOST
+    printf("diag: FC power detected, ROM=%s\n", err ? err : "flash ROM");
+#endif
     cart_start();
+    uint64_t serving_us = time_us_64();
+#if MAGICON_USB_HOST
+    const tusb_rhport_init_t rh = {.role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_AUTO};
+    tusb_rhport_init(0, &rh);
+#else
+    if (!usb_prepared) stdio_init_all();
+    printf("boot: main-to-ROM-ready %llu us, main-to-serving %llu us (excludes boot ROM)\n",
+        (unsigned long long)(prepared_us - boot_us), (unsigned long long)(serving_us - boot_us));
+#endif
     if (!err && info.is_remote) {
         audio_init(PIN_AUDIO);          // PC の音(無音から鳴らし始める)
         remote_loop();                  // 戻らない
@@ -265,7 +322,6 @@ int main(void) {
     for (;;) {
         for (int i = 0; i < 1000; i++) {
             usb_poll();
-            check_power();
             if (info.is_menu && cart_menu_choice() >= 0)
                 reboot_with_pick(PICK_MAGIC | (uint32_t)cart_menu_choice());   // 選ばれた ROM で起動し直す
             sleep_ms(1);
@@ -286,7 +342,67 @@ int main(void) {
                    info.vertical ? "V" : "H", info.battery ? " battery" : "");
         printf("cpu %lu/s  ppu %lu/s  writes %lu/s\n", (unsigned long)(c - lc), (unsigned long)(p - lp),
                (unsigned long)(w - lw));
+#if FC_DIAGNOSTIC && !MAGICON_USB_HOST
+        printf("diag: cpu_pc=%lu ppu_pc=%lu cpu_fifo=%08lx ppu_fifo=%08lx sense=%d M2=%d RD=%d\n",
+            (unsigned long)pio_sm_get_pc(pio0,0), (unsigned long)pio_sm_get_pc(pio1,0),
+            (unsigned long)pio0->fdebug, (unsigned long)pio1->fdebug,
+            gpio_get(46), gpio_get(25), gpio_get(40));
+        printf("diag: total_cpu=%lu total_ppu=%lu total_wr=%lu cpu_fstat=%08lx ppu_fstat=%08lx cpu_level=%08lx ppu_level=%08lx\n",
+            (unsigned long)c, (unsigned long)p, (unsigned long)w,
+            (unsigned long)pio0->fstat, (unsigned long)pio1->fstat,
+            (unsigned long)pio0->flevel, (unsigned long)pio1->flevel);
+        printf("diag: first_cpu=%08lx\n", (unsigned long)diag_first_cpu);
+#if FC_DIAG_NROM_GAME
+        printf("CPU GAME: last_header=%08lx any_late_read_ack=%lu (includes internal reads)\n",
+            (unsigned long)diag_last_cpu_header,(unsigned long)(pio0->irq&1));
+#endif
+#if FC_DIAG_CPU_ONLY
+        printf("CPU ONLY: loop_marks=%lu sequence_errors=%lu service_max_cycles=%lu measured=%lu sys_hz=%lu\n",
+            (unsigned long)diag_marks, (unsigned long)diag_mark_errors,
+            (unsigned long)diag_service_max, (unsigned long)diag_service_count,
+            (unsigned long)clock_get_hz(clk_sys));
+        uint32_t printed_errors = 0; // repeat records so a later USB connection can read them
+        uint32_t available = diag_error_count;
+        __dmb();
+        while (printed_errors < available) {
+            uint32_t n = printed_errors++;
+            printf("CPU ERROR %lu: expected=%02lx actual=%02lx header=%08lx data=%08lx previous=%08lx mark=%lu\n",
+                (unsigned long)n, (unsigned long)(diag_errors[n][0] >> 8),
+                (unsigned long)(diag_errors[n][0] & 255), (unsigned long)diag_errors[n][1],
+                (unsigned long)diag_errors[n][2], (unsigned long)diag_errors[n][3],
+                (unsigned long)diag_errors[n][4]);
+        }
+        uint32_t trace_count = diag_trace_count;
+        __dmb();
+        if (trace_count) {
+            printf("CPU TRACE: mark=%lu count=%lu (0=previous; 1=unexpected; reply=queued, not observed)\n",
+                (unsigned long)diag_trace_mark, (unsigned long)trace_count);
+            for (uint32_t n = 0; n < trace_count; n++)
+                printf("TRACE %lu: header=%08lx reply=%08lx\n", (unsigned long)n,
+                    (unsigned long)diag_trace[n][0], (unsigned long)diag_trace[n][1]);
+        }
+#if FC_DIAG_LIVE
+        printf("LIVE PPU: handler_max_cycles=%lu measured=%lu missed_flag=%lu\n",
+            (unsigned long)diag_ppu_service_max, (unsigned long)diag_ppu_service_count,
+            (unsigned long)(pio1->irq & 1));
+#endif
+#endif
+#endif
         lc = c; lp = p; lw = w;
+#if FC_DIAG_DIRECT_CHR
+#if FC_DIAG_DMA_CHR
+#if FC_DIAG_NROM_GAME
+        printf("DIRECT CHR DMA NROM GAME: fixed CHR ROM; GPIO26-33=%02lx A13=%d\n",
+#elif FC_DIAG_IMAGE
+        printf("DIRECT CHR DMA IMAGE JN7xCleD 128x128 grayscale: ppu counter unused; GPIO26-33=%02lx A13=%d\n",
+#else
+        printf("DIRECT CHR DMA SRAM TRIANGLES: ppu counter unused; GPIO26-33=%02lx A13=%d\n",
+#endif
+#else
+        printf("DIRECT CHR FAST A3 PLANE CHECK + NROM fast bookkeeping: ppu counter unused; GPIO26-33=%02lx A13=%d\n",
+#endif
+            (unsigned long)((gpio_get_all64()>>26)&255),gpio_get(42));
+#endif
     }
 }
 

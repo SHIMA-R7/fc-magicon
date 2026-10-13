@@ -9,6 +9,7 @@
 // 応答はコア1が CPU と PPU の両方の FIFO を見て返す(割り込みなし)。PPU を優先する。
 // USB シリアルに 1 秒ごとの CPU・PPU の読み出し回数を出す(PPU は表示中およそ 530 万回/秒の見込み)。
 #include <stdio.h>
+#include "../power_guard.h"
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/pio.h"
@@ -35,10 +36,10 @@ static void __not_in_flash_func(bus_loop)(void) {
         if (!pio_sm_is_rx_fifo_empty(ppu, 0)) {              // PPU を先に(こちらの方が速い)
             uint32_t v = ppu->rxf[0];
             if (v & (1u << 16)) {                            // A13 = 1: ネームテーブル(本体の VRAM が出す)
-                ppu->txf[0] = 0;
+                ppu->txf[0] = 0x80000000u;
                 n_ppu_nt++;
             } else {
-                ppu->txf[0] = 0xFF00u | chr[v & 0x1FFF];     // AD0-7 + A8-12 = 13 ビットのアドレス
+                ppu->txf[0] = 0x8000FF00u | chr[v & 0x1FFF];     // AD0-7 + A8-12 = 13 ビットのアドレス
                 n_ppu++;
             }
         }
@@ -93,26 +94,26 @@ int main(void) {
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_khz(250000, true);
-    stdio_init_all();
-
-    while (!gpio_get(PIN_FC_5V)) {                           // 本体の電源が入るまでバスへ出さない
-        gpio_xor_mask64(1ull << PIN_LED);
-        sleep_ms(100);
-        printf("waiting for Famicom 5V (GPIO46)...\n");
-    }
-    gpio_put(PIN_LED, 0);
-    gpio_put(PIN_CIRAM_A10, 0);
-    gpio_set_dir(PIN_CIRAM_A10, GPIO_OUT);                   // 1画面ミラー(JP1 を閉じた時だけ効く)
 
     for (uint i = 0; i < sizeof prg; i++)
         prg[i] = chr_test_rom[i % sizeof chr_test_rom];
     make_chr();
+
+    bool usb_prepared = !gpio_get(PIN_FC_5V);
+    if (usb_prepared) stdio_init_all();
+    fc_wait_power();
+    fc_arm_power_guard();
+    gpio_put(PIN_LED, 0);
+    gpio_put(PIN_CIRAM_A10, 0);
+    gpio_set_dir(PIN_CIRAM_A10, GPIO_OUT);
 
     pio_set_gpio_base(pio0, 0);                              // CPU: GPIO0-31
     pio_set_gpio_base(pio1, 16);                             // PPU: GPIO16-47
     ppu_chr_program_init(pio1, 0, pio_add_program(pio1, &ppu_chr_program));
     cpu_bus_program_init(pio0, 0, pio_add_program(pio0, &cpu_bus_program));
     multicore_launch_core1(bus_loop);
+    pio_sm_set_enabled(pio1, 0, true);
+    if (!usb_prepared) stdio_init_all();
 
     printf("FC-MAGICON chr_test: CPU+PPU at 250MHz\n");
     uint32_t lc = 0, lp = 0, ln = 0;

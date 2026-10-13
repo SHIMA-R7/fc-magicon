@@ -106,7 +106,12 @@ void sim_cpu_write(uint16_t addr, uint8_t val, uint64_t cycle) {
     }
 }
 
+static uint64_t sim_ppu_bus_ticks;
+extern void cart_host_a12_address(uint16_t addr,uint64_t ppu_ticks);
+void sim_ppu_tick(void){sim_ppu_bus_ticks++;}
+void sim_ppu_address(uint16_t addr){cart_host_a12_address(addr,sim_ppu_bus_ticks);}
 uint8_t sim_ppu_access(uint16_t addr) {                              // ppu_chr.pio: bit0-12 = アドレス、bit16 = A13
+    sim_ppu_address(addr);
     uint32_t r = cart_host_ppu((addr & 0x1FFF) | ((addr & 0x2000) ? 1u << 16 : 0));
     return ((r >> 8) & 0xFF) == 0xFF ? (r & 0xFF) : 0;
 }

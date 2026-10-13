@@ -34,6 +34,8 @@ uint8_t sim_ppu_access(uint16_t addr);                  /* PPU バスの読み�
 uint8_t sim_ppu_peek(uint16_t addr);                    /* 絵を描くだけ(数えない) */
 int sim_mirror(void);                                   /* cart.c のミラーリング: 0 水平 1 垂直 2/3 1画面 */
 bool sim_irq(void);
+void sim_ppu_tick(void);
+void sim_ppu_address(uint16_t addr);
 ''')
 
 # CPU の書き込み
@@ -122,6 +124,19 @@ rep('''    if (ppu->dot == 257) {
 
     if (ppu->dot == 257) {
         // v: |_...|.F..| |...E|DCBA| = t: |_...|.F..| |...E|DCBA|''')
+# Continuous-time host A12 model: count PPU dots, not number of reads.
+rep('void ppu_tick(ppu_t *ppu, bool *out_new_frame) {',
+    'void ppu_tick(ppu_t *ppu, bool *out_new_frame) {\n    if (magicon_on) sim_ppu_tick();')
+rep('                ppu->regs.v = ppu->regs.t;',
+    '                ppu->regs.v = ppu->regs.t;\n                if (magicon_on) sim_ppu_address(ppu->regs.v & 0x3fff);')
+
+rep('            ppu->regs.v += ppu->ctrl.addr_increment;',
+    '            ppu->regs.v += ppu->ctrl.addr_increment;\n            if (magicon_on) sim_ppu_address(ppu->regs.v & 0x3fff);',count=2)
+
+# A level IRQ must not overwrite an already latched NMI.
+rep('void cpu_trigger_irq(cpu_t *cpu) {\n    if (!cpu->flag_dis_interrupt) {',
+    'void cpu_trigger_irq(cpu_t *cpu) {\n    if (!cpu->flag_dis_interrupt && cpu->interrupt != INTERRUPT_NMI) {')
+
 # /IRQ
 rep('''bool agnes_tick(agnes_t *agnes, bool *out_new_frame) {
     int cpu_cycles = cpu_tick(&agnes->cpu);''', '''bool agnes_tick(agnes_t *agnes, bool *out_new_frame) {

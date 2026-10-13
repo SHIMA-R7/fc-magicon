@@ -29,6 +29,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nesframe import encode   # noqa: E402
+from remote_protocol import frame_chunks
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -94,9 +95,10 @@ class IoThread(threading.Thread):
     """COM / TCP の読み書きを別スレッドでやる。画面を作っている間に前の 1 枚を送る
     (順番にやると 1 枚 = 作る 33ms + USB へ送る 25ms になり、USB 直結で 15 fps しか出なかった。2026-09-27)。
     読み書きを同じスレッドにまとめるのは、Win32 の COM のハンドルは読みと書きが互いに待ち合うため"""
-    def __init__(self, port):
+    def __init__(self, port, chunked=False):
         super().__init__(daemon=True)
         self.port = port
+        self.chunked = chunked
         self.lock = threading.Lock()
         self.rx = bytearray()
         self.pending = None
@@ -114,7 +116,19 @@ class IoThread(threading.Thread):
                 if audio:
                     self.port.write(b"".join(audio))
                 if pkt is not None:
-                    self.port.write(pkt)                 # カセットが前の 1 枚を出すまで、ここで待たされる
+                    parts = frame_chunks(pkt) if self.chunked else [pkt]
+                    for part in parts:
+                        # Never abandon a partially sent frame. New pending frames
+                        # wait here, while audio may precede each bounded chunk.
+                        with self.lock:
+                            urgent, self.audio = self.audio, []
+                        if urgent:
+                            self.port.write(b''.join(urgent))
+                        self.port.write(part)
+                        incoming = self.port.read()
+                        if incoming:
+                            with self.lock:
+                                self.rx += incoming
                 data = self.port.read()
                 if data:
                     with self.lock:
@@ -355,8 +369,9 @@ def cursor_pos():
 class View:
     """どこを映すか。fit = 画面全体を 256 幅に縮める(縦横比はそのまま、上下は黒)、zoom = 256 x 240 を等倍で"""
 
-    def __init__(self):
+    def __init__(self, stretch=False):
         self.mode, self.follow = "fit", True
+        self.stretch = stretch
         self.zx, self.zy = 0, 0
         self.g = Grabber()
 
@@ -370,9 +385,14 @@ class View:
             img = self.g.grab((self.zx, self.zy, 256, 240), (0, 0, 256, 240))
             cx, cy = mx - self.zx, my - self.zy
         else:
-            h = round(sh * 256 / sw)
-            img = self.g.grab((0, 0, sw, sh), (0, (240 - h) // 2, 256, h))
-            cx, cy = mx * 256 // sw, (240 - h) // 2 + my * h // sh
+            if self.stretch:
+                w,h=256,240
+            else:
+                scale=min(256/sw,240/sh)
+                w,h=max(1,round(sw*scale)),max(1,round(sh*scale))
+            ox,oy=(256-w)//2,(240-h)//2
+            img = self.g.grab((0, 0, sw, sh), (ox, oy, w, h))
+            cx, cy = ox + mx * w // sw, oy + my * h // sh
         visible = 0 <= cx < 256 and 0 <= cy < 240
         return img, (max(0, min(255, cx)), max(0, min(239, cy)), visible)
 
@@ -390,11 +410,13 @@ def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", metavar="COMx", help="COM ポートを指定する(既定: USB シリアルを探す)")
     ap.add_argument("--color", action="store_true", help="カラー(既定は灰色 4 階調。文字が読みやすい)")
+    ap.add_argument("--stretch", action="store_true", help="全画面を256x240へ伸縮して黒帯をなくす(TV側の表示比率も確認)")
     ap.add_argument("--tcp", nargs="?", const="fc-magicon.local", metavar="HOST",
                     help="Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ。HOST を省くと fc-magicon.local")
     ap.add_argument("--fps", type=float, help="送る速さの上限(既定: USB 30、Wi-Fi 25。Wi-Fi は 25 までなら遅れ 40ms 前後)")
     ap.add_argument("--dry-run", type=int, metavar="N", help="カセット無しで N 枚取り込んで変換し、速さを表示する")
     ap.add_argument("--no-audio", action="store_true", help="PC の音を送らない")
+    ap.add_argument("--chunked", action="store_true", help="新しい受信ファーム専用: 映像を1KiBずつ送り、間に音声を挟む")
     ap.add_argument("--audio", choices=["pcm16", "pcm8", "adpcm"],
                     help="音の形式(既定: USB 直結 pcm16 = 64KB/秒、Wi-Fi pcm8 = 32KB/秒。adpcm = 16KB/秒は雑音が多い)")
     ap.add_argument("--volume", type=float, default=1.0, help="送る音の大きさ(1.0 = そのまま)")
@@ -403,7 +425,7 @@ def build_parser():
 
 def main():
     a = build_parser().parse_args()
-    view = View()
+    view = View(stretch=a.stretch)
     mode = "color" if a.color else "gray"
 
     if a.dry_run:
@@ -436,7 +458,7 @@ def main():
             sys.exit("magicon の USB シリアル(COM ポート)が見つからない。--port COMx で指定する")
         port = Port(name)
     print(f"{name} を開いた。{mode}、最大 {a.fps} fps。止める時は Ctrl+C")
-    port = IoThread(port)
+    port = IoThread(port, chunked=a.chunked)
     if not a.no_audio:
         from pcaudio import AudioSender, FORMATS
         # Wi-Fi は画面の枚数を優先して 8 ビット(聞き比べで 16 ビットより少し震えるが、ADPCM より雑音が少ない。2026-09-27)
@@ -450,6 +472,7 @@ def main():
     pad_prev, held = 0, 0
     kb = KeyboardBridge(send_scancode)
     speed = 0.0
+    mouse_rx, mouse_ry = 0.0, 0.0
     sent, t_start, next_t = 0, time.perf_counter(), 0.0
     last_io = time.perf_counter()
     prev = None
@@ -487,11 +510,18 @@ def main():
                 dy = (1 if pad & 0x04 else 0) - (1 if pad & 0x08 else 0)
                 if dx or dy:
                     held += 1
-                    speed = min(1 + held * 0.25, 12) * view.pc_pixels_per_fc_pixel()
+                    speed = min(1 + held * 0.25, 12) * view.pc_pixels_per_fc_pixel() * 0.5
+                    # Keep subpixel motion so halving speed also works in zoom mode.
+                    mouse_rx += dx * speed
+                    mouse_ry += dy * speed
+                    step_x, step_y = int(mouse_rx), int(mouse_ry)
+                    mouse_rx -= step_x
+                    mouse_ry -= step_y
                     x, y = cursor_pos()
-                    user32.SetCursorPos(int(x + dx * speed), int(y + dy * speed))
+                    user32.SetCursorPos(x + step_x, y + step_y)
                 else:
                     held = 0
+                    mouse_rx, mouse_ry = 0.0, 0.0
                 for bit, down, up in ((0x80, 0x0002, 0x0004), (0x40, 0x0008, 0x0010)):      # A = 左、B = 右
                     if (pad ^ pad_prev) & bit:
                         send_mouse_button(down if pad & bit else up)

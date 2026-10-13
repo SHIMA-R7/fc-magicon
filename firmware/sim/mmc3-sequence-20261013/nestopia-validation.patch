@@ -1,0 +1,204 @@
+--- a/source/core/board/NstBoardMmc3.hpp
++++ b/source/core/board/NstBoardMmc3.hpp
+@@ -26,6 +26,10 @@
+ #define NST_BOARD_MMC3_H
+ 
+ #include "../NstTimer.hpp"
++extern "C" void fc_mmc3_reset(void);
++extern "C" void fc_mmc3_write(unsigned,unsigned);
++extern "C" int fc_mmc3_clock(void);
++
+ 
+ namespace Nes
+ {
+@@ -61,41 +65,26 @@
+ 					explicit BaseIrq(bool p)
+ 					: persistent(p) {}
+ 
+-					NST_FORCE_INLINE bool Clock()
+-					{
+-						const bool tmp = count || reload;
+-
+-						if (!count || reload)
+-						{
+-							count = latch;
+-						}
+-						else
+-						{
+-							--count;
+-						}
+-
+-						reload = false;
+-						return (tmp | persistent) && !count && enabled;
+-					}
++					NST_FORCE_INLINE bool Clock(){return fc_mmc3_clock()!=0;}
+ 
+ 					void SetLatch(uint data)
+ 					{
+-						latch = data;
++						fc_mmc3_write(0xc000,data); latch = data;
+ 					}
+ 
+ 					void Reload()
+ 					{
+-						reload = true;
++						fc_mmc3_write(0xc001,0); reload = true;
+ 					}
+ 
+ 					void Enable()
+ 					{
+-						enabled = true;
++						fc_mmc3_write(0xe001,0); enabled = true;
+ 					}
+ 
+ 					void Disable(Cpu& cpu)
+ 					{
+-						enabled = false;
++						fc_mmc3_write(0xe000,0); enabled = false;
+ 						cpu.ClearIRQ();
+ 					}
+ 				};
+--- a/source/core/board/NstBoardMmc3.cpp
++++ b/source/core/board/NstBoardMmc3.cpp
+@@ -25,6 +25,7 @@
+ #include "../NstLog.hpp"
+ #include "NstBoard.hpp"
+ #include "NstBoardMmc3.hpp"
++extern "C" void fc_chr_bank(unsigned,const unsigned char*,unsigned long long);
+ 
+ namespace Nes
+ {
+@@ -49,6 +50,7 @@
+ 			{
+ 				if (hard)
+ 				{
++                    fc_mmc3_reset();
+ 					count = 0;
+ 					latch = 0;
+ 					reload = false;
+@@ -278,6 +280,7 @@
+ 			void NST_FASTCALL Mmc3::UpdateChr(uint address,uint bank) const
+ 			{
+ 				chr.SwapBank<SIZE_1K>( address, bank );
++                fc_chr_bank(address,chr[address >> 10],cpu.GetCycles());
+ 			}
+ 
+ 			void Mmc3::UpdatePrg()
+--- a/source/core/NstTimer.hpp
++++ b/source/core/NstTimer.hpp
+@@ -32,6 +32,9 @@
+ #ifndef NST_PPU_H
+ #include "NstPpu.hpp"
+ #endif
++
++extern "C" int fc_mmc3_a12(unsigned,unsigned long long,unsigned);
++extern "C" void fc_mmc3_frame(unsigned long long);
+ 
+ namespace Nes
+ {
+@@ -251,6 +254,7 @@
+ 				void VSync()
+ 				{
+ 					filter.VSync( cpu );
++                fc_mmc3_frame(cpu.GetFrameCycles());
+ 				}
+ 			};
+ 
+@@ -270,7 +274,7 @@
+ 				uint prev = line;
+ 				line = address & 0x1000;
+ 
+-				if (line > prev && filter.Clock(cycle) && unit.Clock())
++				if (fc_mmc3_a12(address,cycle,cpu.GetClock(1)) && unit.Clock())
+ 					cpu.DoIRQ( Cpu::IRQ_EXT, cycle + (Delay ? cpu.GetClock(Delay) : 0) );
+ 			}
+ 		}
+--- a/source/core/NstPpu.hpp
++++ b/source/core/NstPpu.hpp
+@@ -180,6 +180,7 @@
+ 			NST_FORCE_INLINE void FetchAttribute();
+ 			NST_FORCE_INLINE void OpenPattern(uint);
+ 			NST_FORCE_INLINE uint FetchSpPattern();
++            NST_FORCE_INLINE uint FetchChrPattern(uint) const;
+ 			NST_FORCE_INLINE void FetchBgPattern0();
+ 			NST_FORCE_INLINE void FetchBgPattern1();
+ 			NST_FORCE_INLINE void UpdateDecay(byte);
+--- a/source/core/NstPpu.cpp
++++ b/source/core/NstPpu.cpp
+@@ -27,6 +27,9 @@
+ #include "NstPpu.hpp"
+ #include "NstState.hpp"
+ 
++extern "C" unsigned fc_chr_read(unsigned,unsigned,unsigned long long);
++extern "C" void fc_remote_scanline(int);
++
+ namespace Nes
+ {
+ 	namespace Core
+@@ -752,6 +755,12 @@
+ 			return (*this)[3][address];
+ 		}
+ 
++        NST_FORCE_INLINE uint Ppu::FetchChrPattern(uint address) const
++        {
++            fc_remote_scanline(scanline);
++            return fc_chr_read(address,chr.FetchPattern(address),GetCycles());
++        }
++
+ 		NST_FORCE_INLINE uint Ppu::Chr::FetchPattern(uint address) const
+ 		{
+ 			return accessor.Fetch( address & 0x1FFF );
+@@ -836,13 +845,13 @@
+ 
+ 		NST_FORCE_INLINE uint Ppu::FetchSpPattern()
+ 		{
+-			io.busData = chr.FetchPattern( (io.address & 0xFF00) | io.octalLatch );
++			io.busData = FetchChrPattern( (io.address & 0xFF00) | io.octalLatch );
+ 			return io.busData;
+ 		}
+ 
+ 		NST_FORCE_INLINE void Ppu::FetchBgPattern0()
+ 		{
+-			const uint pattern = chr.FetchPattern( (io.address & 0xFF00) | io.octalLatch );
++			const uint pattern = FetchChrPattern( (io.address & 0xFF00) | io.octalLatch );
+ 			io.busData = pattern;
+ 
+ 			tiles.pattern[1] = pattern >> 0 & 0x55;
+@@ -851,7 +860,7 @@
+ 
+ 		NST_FORCE_INLINE void Ppu::FetchBgPattern1()
+ 		{
+-			const uint pattern = chr.FetchPattern( (io.address & 0xFF00) | io.octalLatch );
++			const uint pattern = FetchChrPattern( (io.address & 0xFF00) | io.octalLatch );
+ 			io.busData = pattern;
+ 
+ 			tiles.fetched = 1;
+@@ -1351,7 +1360,7 @@
+ 			*/
+ 			if (!rendering)
+ 			{
+-				io.buffer = (address >= 0x2000 ? nmt.FetchName( address ) : chr.FetchPattern( address ));
++				io.buffer = (address >= 0x2000 ? nmt.FetchName( address ) : FetchChrPattern( address ));
+ 			}
+ 			else
+ 			{
+@@ -1362,7 +1371,7 @@
+ 
+ 				const uint bus = (io.address & 0x3F00) | io.octalLatch;
+ 
+-				io.buffer = (bus >= 0x2000 ? nmt.FetchName( bus ) : chr.FetchPattern( bus ));
++				io.buffer = (bus >= 0x2000 ? nmt.FetchName( bus ) : FetchChrPattern( bus ));
+ 				io.busData = io.buffer;
+ 
+ 				UpdateVramAddress();
+@@ -2004,8 +2013,8 @@
+ 
+ 				const uint patterns[2] =
+ 				{
+-					chr.FetchPattern( address | 0x0 ),
+-					chr.FetchPattern( address | 0x8 )
++					FetchChrPattern( address | 0x0 ),
++					FetchChrPattern( address | 0x8 )
+ 				};
+ 
+ 				LoadSprite( patterns[0], patterns[1], buffer, (buffer - oam.buffer) / 4 );

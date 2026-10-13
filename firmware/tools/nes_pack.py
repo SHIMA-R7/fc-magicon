@@ -25,6 +25,9 @@ EXP = ["VRC6", "VRC7", "FDS", "MMC5", "N163", "Sunsoft 5B", "VT02+"]
 
 def nsf(src, data):
     """NSF の情報を表示して、magicon で鳴らせるかを返す"""
+    if len(data) <= 128:
+        print(f"{src}: NSF header is short or program data is empty")
+        return False
     s = lambda o: data[o:o + 32].split(b"\0")[0].decode("ascii", "replace")
     songs, start = data[6], data[7]
     load, init, play = (data[i] | data[i + 1] << 8 for i in (8, 10, 12))
@@ -147,7 +150,16 @@ def main():
 
 def nes(src, data):
     """.nes の情報を表示して、magicon で動くかを返す"""
+    if len(data) < 16:
+        print(f"{src}: iNES header is too short")
+        return False
     nes2 = (data[7] & 0x0C) == 0x08
+    if data[6] & 8:
+        print(f"{src}: four-screen VRAM is not supported")
+        return False
+    if nes2 and (any(data[8:9]) or any(data[10:16]) or (data[9] & 15) == 15 or data[9] >> 4 == 15):
+        print(f"{src}: NES 2.0 extensions are not supported")
+        return False
     prg_n, chr_n = data[4], data[5]
     if nes2:
         prg_n |= (data[9] & 0x0F) << 8
@@ -160,6 +172,10 @@ def nes(src, data):
           f"CHR {'RAM 8KB' if chr_ == 0 else f'{chr_ // 1024}KB'}  ミラー {mir}"
           f"{'  バッテリー' if data[6] & 2 else ''}{'  NES 2.0' if nes2 else ''}")
     ok = True
+    offset = 16 + (512 if data[6] & 4 else 0)
+    if not prg or len(data) < offset + prg + chr_:
+        print("  ! PRG is empty or ROM data is truncated")
+        ok = False
     if mapper not in SUPPORTED:
         print("  ! このマッパーはまだ対応していない")
         ok = False

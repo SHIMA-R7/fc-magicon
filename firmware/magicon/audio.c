@@ -58,7 +58,7 @@ void audio_poll(void) {
     uint32_t idx = rd_index();
     rd_abs += (idx - last_rd_idx) & RING_MASK;      // 前に見てから鳴らした数(256ms 以内に呼ばれる前提)
     last_rd_idx = idx;
-    while (cleared_abs < rd_abs)                    // 鳴らし終えた所を無音に
+    while (cleared_abs != rd_abs)                  // uint32 の折返しを許す
         ring[cleared_abs++ & RING_MASK] = SILENCE;
 }
 
@@ -70,10 +70,10 @@ static void put(int16_t s) {
 // 書き始める前に、書く所が鳴らす所より先か(足りない = 途切れた → 100ms 先へ)、溜まり過ぎていないか(→ 捨てる)
 static bool make_room(void) {
     audio_poll();
-    if (wr_abs < rd_abs + 64) {
+    if ((int32_t)(wr_abs - rd_abs) < 64) {
         wr_abs = rd_abs + LATENCY;                  // 間は audio_poll が無音にしてある
-        if (cleared_abs < rd_abs) cleared_abs = rd_abs;
-        for (uint32_t a = rd_abs; a < wr_abs; a++)
+        cleared_abs = rd_abs;
+        for (uint32_t a = rd_abs; a != wr_abs; a++)
             ring[a & RING_MASK] = SILENCE;
     }
     return wr_abs - rd_abs < TOO_MUCH;

@@ -12,6 +12,16 @@
 //   CPU が $2006(アドレス)・$2007(データ)に書く値を横から読み、同じ所へ書き込む。$2000 の +1/+32 と、
 //   $2002 の読み出し・$2005 の書き込みで切り替わる「2回目か」のフラグも真似する。
 #include <string.h>
+#include <stdatomic.h>
+#ifndef FC_REMOTE_DMA
+#define FC_REMOTE_DMA 0
+#endif
+#ifndef FC_REMOTE_FULL
+#define FC_REMOTE_FULL 0
+#endif
+#if FC_DIAG_IMAGE
+#include "static_image.h"
+#endif
 #ifdef CART_HOST                        // PC の試験台(firmware/sim)でビルドする時
 #include "host_pico.h"
 #else
@@ -21,10 +31,55 @@
 #include "cpu_m2.pio.h"
 #include "ppu_chr.pio.h"
 #include "mirror.pio.h"
+#include <stdio.h>
+#include "hardware/structs/m33.h"
+static volatile bool bus_ready;
+#if FC_DIAG_SPLIT
+static void __not_in_flash_func(split_power_lost)(void);
+#endif
+#include "mmc3_a12.pio.h"
+#include "rd_width.pio.h"
+#include "ppu_constant.pio.h"
+#include "ppu_lookup.pio.h"
+#include "hardware/dma.h"
+#include "hardware/structs/busctrl.h"
+#include "hardware/irq.h"
+#if FC_DIAG_DMA_CHR || FC_REMOTE_DMA
+static uint32_t diag_chr_lookup[8192] __attribute__((aligned(32768)));
+static void diag_dma_chr_init(const uint8_t *source) {
+    if(source)for(uint a=0;a<8192;a++)diag_chr_lookup[a]=0xff00u |
+#if FC_DIAG_NROM_GAME
+        source[a];
+#elif FC_DIAG_IMAGE
+        static_image_chr[a];
+#else
+        (0xffu>>(a&7));
+#endif
+    uint data=dma_claim_unused_channel(true), address=dma_claim_unused_channel(true);
+    dma_channel_config dc=dma_channel_get_default_config(data);
+    channel_config_set_transfer_data_size(&dc,DMA_SIZE_32);
+    channel_config_set_read_increment(&dc,false);
+    channel_config_set_write_increment(&dc,false);
+    dma_channel_configure(data,&dc,&pio1->txf[0],diag_chr_lookup,1,false);
+    dma_channel_config ac=dma_channel_get_default_config(address);
+    channel_config_set_transfer_data_size(&ac,DMA_SIZE_32);
+    channel_config_set_read_increment(&ac,false);
+    channel_config_set_write_increment(&ac,false);
+    channel_config_set_dreq(&ac,pio_get_dreq(pio1,0,false));
+    dma_channel_configure(address,&ac,&dma_hw->ch[data].al3_read_addr_trig,
+        &pio1->rxf[0],dma_encode_endless_transfer_count(),true);
+}
+#endif
 #endif
 #include "cart.h"
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
-#include "remote_driver.h"              // 画面転送モードの 6502 プログラムとカーソル(gen_remote_driver.py)
+#if FC_REMOTE_FULL
+#include "remote_full_driver.h"
+#elif FC_REMOTE_DMA
+#include "remote_compact_driver.h"
+#else
+#include "remote_driver.h"
+#endif
 #include "nsf_driver.h"                 // NSF プレイヤーのドライバー($5000-)・画面の土台・CHR(gen_nsf_driver.py)
 #include "menu_driver.h"                // ゲーム選択メニューの 6502 プログラム・画面の土台(gen_menu_driver.py)
 
@@ -34,8 +89,48 @@
 #define B_PPU_A13   (1u << 16)
 
 volatile uint32_t stat_cpu, stat_ppu, stat_wr;
+volatile uint32_t diag_first_cpu;
+volatile uint32_t diag_last_cpu_header;
+volatile uint32_t diag_marks, diag_mark_errors, diag_service_max, diag_service_count;
+volatile uint32_t diag_ppu_service_max, diag_ppu_service_count;
+static uint8_t diag_last_mark;
+volatile uint32_t diag_error_count;
+volatile uint32_t diag_errors[8][5]; // expected/actual, header, data, previous marker data, marker index
+volatile uint32_t diag_trace_count, diag_trace_mark;
+volatile uint32_t diag_trace[16][2]; // raw header and queued reply; not CPU-observed data
+#if FC_DIAG_CPU_ONLY
+static uint32_t diag_write_header, diag_write_data, diag_previous_mark_data;
+static uint32_t diag_prev_header, diag_prev_reply;
+static inline __attribute__((always_inline)) void diag_record_cpu(uint32_t v, uint32_t reply) {
+    if (diag_trace_count >= 16 || !diag_marks) return;
+    uint32_t n = diag_trace_count;
+    if (!n) {
+        uint32_t a = (v >> 8) & 0x7fff;
+        // Built-in loop only reads $00 and ROM $C070-$C079 (or its $8070 mirror).
+        bool unexpected = (v & B_RW) && ((v & B_ROMSEL) ? a != 0 :
+#if FC_DIAG_IMAGE
+            ((a & 0x3fff) < STATIC_IMAGE_LOOP_START || (a & 0x3fff) >= STATIC_IMAGE_LOOP_END));
+#else
+            ((a & 0x3fff) < 0x70 || (a & 0x3fff) > 0x79));
+#endif
+        if (!unexpected) { diag_prev_header = v; diag_prev_reply = reply; return; }
+        diag_trace[0][0] = diag_prev_header; diag_trace[0][1] = diag_prev_reply;
+        diag_trace_mark = diag_marks;
+        n = 1;
+    }
+    diag_trace[n][0] = v; diag_trace[n][1] = reply;
+#ifndef CART_HOST
+    __dmb();
+#endif
+    diag_trace_count = n + 1;
+}
+#endif
 
+#if FC_REMOTE_DMA
+static uint8_t rom[65536];              // remote-only build: two frames + driver
+#else
 static uint8_t rom[ROM_MAX];            // PRG の後ろに CHR
+#endif
 static uint8_t chr_ram[0x2000];
 static uint8_t wram[0x2000];
 
@@ -104,10 +199,12 @@ static void __not_in_flash_func(set_mirror)(int m) {
 // ---- MMC1 ----
 static uint8_t m1_shift = 0x10, m1_ctrl = 0x0C, m1_chr0, m1_chr1, m1_prg;
 static uint32_t cyc, m1_last_cyc;
+static bool wram_enabled = true, wram_protected;
 
 static void __not_in_flash_func(mmc1_update)(void) {
     static const int m[4] = {MIR_0, MIR_1, MIR_V, MIR_H};
     set_mirror(m[m1_ctrl & 3]);
+    wram_enabled = !(m1_prg & 0x10);
     uint bank = m1_prg & 0x0F;
     switch ((m1_ctrl >> 2) & 3) {
     case 0: case 1: prg32(bank >> 1); break;
@@ -146,10 +243,19 @@ static void __not_in_flash_func(mmc1_write)(uint addr, uint d) {
 }
 
 // ---- MMC3 ----
-static uint8_t m3_sel, m3_r[8];
-static uint8_t m3_latch, m3_count;
-static bool m3_reload, m3_irq_en, is_mmc3;
+static volatile uint8_t m3_sel, m3_r[8];
+static volatile uint8_t m3_latch, m3_count;
+static volatile bool m3_irq_en;
+// CPU core publishes requests; IRQ core alone acknowledges and clocks count.
+static atomic_uint m3_reload_requested;
+static uint32_t m3_reload_handled;
+static bool is_mmc3;
+static void mmc3_irq_core0_init(void);
 static uint32_t a12_low;
+#ifdef CART_HOST
+static bool host_timed_a12,host_a12_high;
+static uint64_t host_a12_low_m2;
+#endif
 
 static void __not_in_flash_func(mmc3_update)(void) {
     if (m3_sel & 0x40) { prg8(0, n8() - 2); prg8(2, m3_r[6]); }
@@ -168,25 +274,177 @@ static void __not_in_flash_func(mmc3_write)(uint addr, uint d) {
     case 0x8000: m3_sel = d; mmc3_update(); break;
     case 0x8001: m3_r[m3_sel & 7] = d; mmc3_update(); break;
     case 0xA000: set_mirror((d & 1) ? MIR_H : MIR_V); break;
-    case 0xA001: break;                                              // WRAM の保護(無視)
+    case 0xA001: wram_enabled = (d & 0x80) != 0; wram_protected = (d & 0x40) != 0; break;
     case 0xC000: m3_latch = d; break;
-    case 0xC001: m3_count = 0; m3_reload = true; break;
+    case 0xC001:
+        atomic_store_explicit(&m3_reload_requested,
+            atomic_load_explicit(&m3_reload_requested,memory_order_relaxed)+1,
+            memory_order_release);
+        break;
     case 0xE000: m3_irq_en = false; gpio_put(PIN_IRQ, 0); break;     // 無効 + 受け付け
     case 0xE001: m3_irq_en = true; break;
     }
 }
 
+#if FC_DIAG_MMC3_GAME
+static volatile uint32_t m3_chr_request;
+static volatile uint32_t m3_last_write, m3_write_count;
+static uint32_t m3_prg_mask;
+static volatile uint32_t m3_a12_events,m3_irq_assertions,m3_chr_copy_max,m3_chr_copies;
+static volatile uint32_t m3_a12_short,m3_a12_mid,m3_a12_line,m3_a12_gap;
+static inline __attribute__((always_inline)) void mmc3_chr_changed(void) {
+    m3_chr_request++;
+#ifndef CART_HOST
+    __dmb();__sev();
+#endif
+}
+// Fast path for power-of-two MMC3 ROM sizes (Mario3: 32 PRG/128 CHR banks).
+static inline __attribute__((always_inline)) void mmc3_fast_prg(void) {
+    uint mask=(prg_size>>13)-1;
+    uint switched=(m3_r[6]&0x3f)&mask;
+    prg_map[0]=prg+(((m3_sel&0x40)?mask-1:switched)<<13);
+    prg_map[2]=prg+(((m3_sel&0x40)?switched:mask-1)<<13);
+}
+static inline __attribute__((always_inline)) void mmc3_fast_chr(uint reg) {
+    uint inv=(m3_sel&0x80)?4:0, mask=(chr_size>>10)-1;
+    if(reg<2) {
+        uint slot=reg*2, bank=m3_r[reg]&0xfe;
+        chr_map[slot^inv]=chr+((bank&mask)<<10);
+        chr_map[(slot+1)^inv]=chr+(((bank+1)&mask)<<10);
+    } else chr_map[(reg+2)^inv]=chr+((m3_r[reg]&mask)<<10);
+}
+static void __attribute__((noinline)) __not_in_flash_func(mmc3_game_write)(uint addr,uint d) {
+    m3_last_write=(addr<<8)|d;m3_write_count++;
+    switch(addr&0xe001) {
+    case 0x8000: {
+        uint changed=m3_sel^d;m3_sel=d;
+        if(changed&0x40) {
+            uint8_t *previous=prg_map[0];prg_map[0]=prg_map[2];prg_map[2]=previous;
+        }
+        if(changed&0x80)mmc3_chr_changed();
+        break;
+    }
+    case 0x8001: {
+        uint reg=m3_sel&7;m3_r[reg]=d;
+        if(reg>=6) {
+            if(reg==7)prg_map[1]=prg+(((d&0x3f)&m3_prg_mask)<<13);
+            else prg_map[(m3_sel>>5)&2]=prg+(((d&0x3f)&m3_prg_mask)<<13);
+        } else mmc3_chr_changed();
+        break;
+    }
+    default:mmc3_write(addr,d);break;
+    }
+}
+#ifndef CART_HOST
+static volatile bool m3_report_due;
+static struct repeating_timer m3_report_timer;
+static bool mmc3_report_tick(struct repeating_timer *timer) {
+    (void)timer;m3_report_due=true;__sev();return true;
+}
+static void __not_in_flash_func(mmc3_chr_background_loop)(void) {
+    m33_hw->demcr|=M33_DEMCR_TRCENA_BITS;
+    m33_hw->dwt_ctrl|=M33_DWT_CTRL_CYCCNTENA_BITS;
+    const uint8_t *cached[8];
+    for(uint slot=0;slot<8;slot++)cached[slot]=NULL; // do not miss writes during PIO startup
+    uint32_t seen=UINT32_MAX;
+    add_repeating_timer_ms(1000,mmc3_report_tick,NULL,&m3_report_timer);
+    for(;;) {
+        if(m3_report_due) {
+            m3_report_due=false;
+            printf("MMC3: cpu=%lu wr=%lu last_header=%08lx mapper_writes=%lu last_write=%06lx select=%02x chr_request=%lu IRQcount=%u latch=%u enable=%u IRQpin=%u lateACK=%lu pcCPU=%u pcPPU=%u R6=%u R7=%u\n",
+                (unsigned long)stat_cpu,(unsigned long)stat_wr,(unsigned long)diag_last_cpu_header,
+                (unsigned long)m3_write_count,(unsigned long)m3_last_write,m3_sel,
+                (unsigned long)m3_chr_request,m3_count,m3_latch,m3_irq_en,gpio_get(PIN_IRQ),
+                (unsigned long)(pio0->irq&1),pio_sm_get_pc(pio0,0),pio_sm_get_pc(pio1,0),m3_r[6],m3_r[7]);
+            printf("MMC3 timing: A12_events=%lu IRQ_asserts=%lu CHR_copies=%lu max_1K_copy_cycles=%lu request=%lu handled=%lu\n",
+                (unsigned long)m3_a12_events,(unsigned long)m3_irq_assertions,
+                (unsigned long)m3_chr_copies,(unsigned long)m3_chr_copy_max,
+                (unsigned long)m3_chr_request,(unsigned long)seen);
+            printf("MMC3 A12 intervals: under8us=%lu under40us=%lu under80us=%lu longer=%lu\n",
+                (unsigned long)m3_a12_short,(unsigned long)m3_a12_mid,
+                (unsigned long)m3_a12_line,(unsigned long)m3_a12_gap);
+        }
+        uint32_t requested=m3_chr_request;
+        if(requested==seen){__wfe();continue;}
+        __dmb();
+        for(uint reg=0;reg<6;reg++)mmc3_fast_chr(reg);
+        for(uint slot=0;slot<8;slot++) {
+            __dmb();
+            const uint8_t *source=*(const uint8_t *volatile *)&chr_map[slot];
+            if(source!=cached[slot]) {
+                uint32_t begun=m33_hw->dwt_cyccnt;
+                // All CHR bank bases are 1 KiB aligned. Expand four bytes per
+                // load to reduce source reads and loop overhead on shared SRAM.
+                uint32_t *target=&diag_chr_lookup[slot*1024];
+                for(uint i=0;i<1024;i+=4) {
+                    uint32_t packed;
+                    memcpy(&packed,source+i,sizeof(packed));
+                    target[i+0]=0xff00u|(packed&0xffu);
+                    target[i+1]=0xff00u|((packed>>8)&0xffu);
+                    target[i+2]=0xff00u|((packed>>16)&0xffu);
+                    target[i+3]=0xff00u|(packed>>24);
+                }
+                __dmb();cached[slot]=source;
+                uint32_t elapsed=m33_hw->dwt_cyccnt-begun;
+                if(elapsed>m3_chr_copy_max)m3_chr_copy_max=elapsed;
+                m3_chr_copies++;
+            }
+        }
+        seen=requested;
+    }
+}
+#endif
+#endif
+
 // PPU A12 の立ち上がり(A12 = 0 の読み出しが 8 回以上続いた後)で数える。スプライトを $1000 に置く普通の使い方で 1 ライン 1 回
-static inline void __not_in_flash_func(mmc3_clock)(void) {
-    if (m3_count == 0 || m3_reload) {
+static inline void __not_in_flash_func(mmc3_clock_snapshot)(uint32_t requested) {
+    if (m3_count == 0 || requested != m3_reload_handled) {
         m3_count = m3_latch;
-        m3_reload = false;
+        m3_reload_handled = requested;
     } else {
         m3_count--;
     }
     if (m3_count == 0 && m3_irq_en)
+#if FC_DIAG_MMC3_NO_IRQ
+        gpio_put(PIN_IRQ, 0); // comparison only: count normally, suppress external IRQ
+#else
         gpio_put(PIN_IRQ, 1);
+#endif
 }
+static inline void __not_in_flash_func(mmc3_clock)(void) {
+    mmc3_clock_snapshot(atomic_load_explicit(&m3_reload_requested,memory_order_acquire));
+}
+
+#if FC_DIAG_MMC3_GAME && !defined(CART_HOST)
+static void __not_in_flash_func(mmc3_a12_core0_irq)(void) {
+    static uint32_t previous;
+    while(!pio_sm_is_rx_fifo_empty(pio2,1)) {
+        (void)pio2->rxf[1];
+        uint32_t now=time_us_32();
+        if(previous) {
+            uint32_t interval=now-previous;
+            if(interval<8)m3_a12_short++;
+            else if(interval<40)m3_a12_mid++;
+            else if(interval<80)m3_a12_line++;
+            else m3_a12_gap++;
+        }
+        previous=now;
+        m3_a12_events++;
+        bool was_asserted=gpio_get(PIN_IRQ);
+        mmc3_clock();
+        __dmb();
+        if(!m3_irq_en)gpio_put(PIN_IRQ,0); // respect a simultaneous CPU-side disable
+        if(!was_asserted && gpio_get(PIN_IRQ))m3_irq_assertions++;
+    }
+}
+static void mmc3_irq_core0_init(void) {
+    irq_set_exclusive_handler(PIO2_IRQ_0,mmc3_a12_core0_irq);
+    irq_set_priority(PIO2_IRQ_0,PICO_HIGHEST_IRQ_PRIORITY);
+    irq_set_priority(USBCTRL_IRQ,0x80);
+    pio_set_irq0_source_enabled(pio2,pis_sm1_rx_fifo_not_empty,true);
+    irq_set_enabled(PIO2_IRQ_0,true);
+}
+#endif
 
 // ---- CPU の書き込み ----
 static uint16_t ppu_v, ppu_t, ppu_inc = 1;
@@ -194,8 +452,14 @@ static bool ppu_w;
 
 static void __not_in_flash_func(ppu_reg_write)(uint addr, uint d) {
     switch (addr & 7) {
-    case 0: ppu_inc = (d & 4) ? 32 : 1; break;
-    case 5: ppu_w = !ppu_w; break;
+    case 0:
+        ppu_inc = (d & 4) ? 32 : 1;
+        ppu_t = (ppu_t & ~0x0C00) | ((d & 3) << 10);
+        break;
+    case 5:
+        if (!ppu_w) ppu_t = (ppu_t & ~0x001F) | (d >> 3);
+        else ppu_t = (ppu_t & ~0x73E0) | ((d & 7) << 12) | ((d & 0xF8) << 2);
+        ppu_w = !ppu_w; break;
     case 6:
         if (!ppu_w) ppu_t = (ppu_t & 0x00FF) | ((d & 0x3F) << 8);
         else { ppu_t = (ppu_t & 0x3F00) | d; ppu_v = ppu_t; }
@@ -212,6 +476,27 @@ static void __not_in_flash_func(ppu_reg_write)(uint addr, uint d) {
 static void __not_in_flash_func(cpu_write)(uint addr, uint d) {
     stat_wr++;                          // 本体の RAM などへの書き込みも数える(何もしない)
     if (addr >= 0x8000) {
+#if FC_DIAG_CPU_ONLY
+        if (addr == 0x8000 && mapper == 0) {
+            if (diag_marks && d != (uint8_t)(diag_last_mark + 1)) {
+                diag_mark_errors++;
+                uint32_t n = diag_error_count;
+                if (n < 8) {
+                    diag_errors[n][0] = ((uint32_t)(uint8_t)(diag_last_mark + 1) << 8) | d;
+                    diag_errors[n][1] = diag_write_header;
+                    diag_errors[n][2] = diag_write_data;
+                    diag_errors[n][3] = diag_previous_mark_data;
+                    diag_errors[n][4] = diag_marks;
+#ifndef CART_HOST
+                    __dmb();
+#endif
+                    diag_error_count = n + 1; // publish only complete records; never overwrite
+                }
+            }
+            diag_previous_mark_data = diag_write_data;
+            diag_last_mark = d; diag_marks++;
+        }
+#endif
         switch (mapper) {
         case 1: mmc1_write(addr, d); break;
         case 2: prg16(0, d); break;
@@ -223,7 +508,7 @@ static void __not_in_flash_func(cpu_write)(uint addr, uint d) {
         switch (mapper) {
         case 87: chr8(((d & 1) << 1) | ((d >> 1) & 1)); break;           // bit0 = 上位、bit1 = 下位(入れ替わっている)
         case 184: chr4(0, d & 7); chr4(1, ((d >> 4) & 7) | 4); break;  // $1000 側はバンク 4〜7 だけ(nesdev)
-        default: wram[addr & 0x1FFF] = d; break;
+        default: if (wram_enabled && !wram_protected) wram[addr & 0x1FFF] = d; break;
         }
     } else if ((addr & 0xE000) == 0x2000) {
         ppu_reg_write(addr, d);
@@ -246,7 +531,10 @@ static inline __attribute__((always_inline)) uint32_t ppu_access(uint32_t v) {
         return 0;
     }
     uint a = v & 0x1FFF;
-    if (is_mmc3) {
+    // Host simulator has no continuous pin timing; physical IRQ edges come
+    // from PIO2 SM1, not from this legacy host-only approximation.
+#ifdef CART_HOST
+    if (is_mmc3 && !host_timed_a12) {
         if (a & 0x1000) {
             if (a12_low >= 8)
                 mmc3_clock();
@@ -255,12 +543,16 @@ static inline __attribute__((always_inline)) uint32_t ppu_access(uint32_t v) {
             a12_low++;
         }
     }
+#endif
     return 0xFF00u | chr_map[a >> 10][a & 0x3FF];
 }
 
 static inline __attribute__((always_inline)) uint32_t cpu_access(uint32_t v) {
     if (wr_pending) {                                         // 書き込みサイクルの2回目の push = データ
         wr_pending = false;
+#if FC_DIAG_CPU_ONLY
+        diag_write_data = v;
+#endif
         cpu_write(wr_addr, v & 0xFF);
         return NO_REPLY;
     }
@@ -268,6 +560,9 @@ static inline __attribute__((always_inline)) uint32_t cpu_access(uint32_t v) {
     cyc++;
     uint a = (v >> 8) & 0x7FFF;
     if (!(v & B_RW)) {
+#if FC_DIAG_CPU_ONLY
+        diag_write_header = v;
+#endif
         // PIO は書き込みなら必ず2回目を push するので、どこへの書き込みでも受け取る(cpu_write が振り分ける)
         wr_pending = true;
         wr_addr = (v & B_ROMSEL) ? a : 0x8000 | a;
@@ -276,7 +571,7 @@ static inline __attribute__((always_inline)) uint32_t cpu_access(uint32_t v) {
     if (!(v & B_ROMSEL))                                      // $8000-$FFFF
         return 0xFF00u | prg_map[a >> 13][a & 0x1FFF];
     if ((a & 0x6000) == 0x6000)                               // $6000-$7FFF(A15 = 0 は /ROMSEL = High で分かる)
-        return 0xFF00u | wram[a & 0x1FFF];
+        return wram_enabled ? (0xFF00u | wram[a & 0x1FFF]) : 0;
     if ((a & 0xE007) == 0x2002)                               // 本体の RAM・PPU・APU: 出さない。$2002 / $2007 の読み出しは覚える
         ppu_w = false;
     else if ((a & 0xE007) == 0x2007)
@@ -284,18 +579,102 @@ static inline __attribute__((always_inline)) uint32_t cpu_access(uint32_t v) {
     return 0;
 }
 
+#if FC_DIAG_CPU_ONLY
+// Dedicated to the built-in NROM/constant-CHR diagnostic. No mapper, WRAM or
+// PPU-register emulation: those are unnecessary for this diagnostic ROM.
+static inline __attribute__((always_inline)) void diag_nrom_bookkeeping(uint32_t v) {
+    if (wr_pending) {
+        wr_pending = false;
+        stat_wr++;
+#if FC_DIAG_NROM_GAME
+        if(wr_addr>=0x6000 && wr_addr<0x8000 && wram_enabled && !wram_protected)
+            wram[wr_addr&0x1fff]=(uint8_t)v;
+#if FC_DIAG_MMC3_GAME
+        else if(wr_addr>=0x8000)mmc3_game_write(wr_addr,(uint8_t)v);
+#endif
+#else
+        if (wr_addr == 0x8000) {
+            uint8_t d = v;
+            if (diag_marks && d != (uint8_t)(diag_last_mark + 1)) diag_mark_errors++;
+            diag_last_mark = d;
+            diag_marks++;
+        }
+#endif
+        return;
+    }
+    stat_cpu++;
+    if (!(v & B_RW)) {
+        wr_pending = true;
+        wr_addr = ((v >> 8) & 0x7fff) | ((v & B_ROMSEL) ? 0 : 0x8000);
+    }
+}
+#endif
+
 #ifndef CART_HOST
 static void __not_in_flash_func(bus_loop)(void) {
     io_ro_32 *cpu_rx = &pio0->rxf[0], *ppu_rx = &pio1->rxf[0];
     io_wo_32 *cpu_tx = &pio0->txf[0], *ppu_tx = &pio1->txf[0];
+#if FC_DIAG_SPLIT
+    save_and_disable_interrupts();
+#endif
+#if FC_DIAG_CPU_ONLY
+    m33_hw->demcr |= M33_DEMCR_TRCENA_BITS;
+    m33_hw->dwt_ctrl |= M33_DWT_CTRL_CYCCNTENA_BITS;
+#endif
+    __dmb(); bus_ready = true;
     for (;;) {
-        if (!pio_sm_is_rx_fifo_empty(pio1, 0))                // PPU を先に(こちらの方が間隔が短い)
-            *ppu_tx = ppu_access(*ppu_rx);
         if (!pio_sm_is_rx_fifo_empty(pio0, 0)) {
-            uint32_t r = cpu_access(*cpu_rx);
-            if (r != NO_REPLY)
-                *cpu_tx = r;
+#if FC_DIAG_CPU_ONLY
+            uint32_t begun = m33_hw->dwt_cyccnt;
+#endif
+            uint32_t v = *cpu_rx;
+            if (!wr_pending) {
+                uint32_t reply = 0x80000000u;
+                if (!(v & B_RW)) {
+                    reply |= 0x10000u; // write acknowledgement, never drive
+                } else {
+                    uint a = (v >> 8) & 0x7FFF;
+                    if (!(v & B_ROMSEL))
+                        reply |= 0xFF00u | prg_map[a >> 13][a & 0x1FFF];
+                    else if ((a & 0x6000) == 0x6000 && wram_enabled)
+                        reply |= 0xFF00u | wram[a & 0x1FFF];
+                }
+                // Deadline-critical acknowledgement precedes all bookkeeping.
+                *cpu_tx = reply;
+#if FC_DIAG_NROM_GAME
+                diag_last_cpu_header = v; // one bounded snapshot, after queued response
+#endif
+#if FC_DIAG_CPU_ONLY
+                if (diag_service_count < 32) {
+                    uint32_t elapsed = m33_hw->dwt_cyccnt - begun;
+                    if (elapsed > diag_service_max) diag_service_max = elapsed;
+                    diag_service_count++;
+                }
+#if !FC_DIAG_NROM_GAME
+                diag_record_cpu(v, reply);
+#endif
+#endif
+#if FC_DIAGNOSTIC
+                if (!stat_cpu) diag_first_cpu = v;
+#endif
+            }
+            // Also consumes the second (data) sample of a write, with no reply.
+#if FC_DIAG_CPU_ONLY && FC_DIAG_DIRECT_CHR
+            diag_nrom_bookkeeping(v);
+#else
+            (void)cpu_access(v);
+#endif
         }
+#if !FC_DIAG_CPU_ONLY
+        if (!FC_REMOTE_DMA && !pio_sm_is_rx_fifo_empty(pio1, 0))
+            *ppu_tx = 0x80000000u | ppu_access(*ppu_rx);
+#endif
+#if !FC_DIAG_MMC3_NO_IRQ && !FC_DIAG_MMC3_GAME
+        if (is_mmc3 && !pio_sm_is_rx_fifo_empty(pio2, 1)) {
+            (void)pio2->rxf[1];
+            mmc3_clock();
+        }
+#endif
     }
 }
 #endif
@@ -347,15 +726,16 @@ static inline __attribute__((always_inline)) uint32_t nsf_cpu_access(uint32_t v)
 
 #ifndef CART_HOST
 static void __not_in_flash_func(nsf_bus_loop)(void) {
+    __dmb(); bus_ready = true;
     io_ro_32 *cpu_rx = &pio0->rxf[0], *ppu_rx = &pio1->rxf[0];
     io_wo_32 *cpu_tx = &pio0->txf[0], *ppu_tx = &pio1->txf[0];
     for (;;) {
         if (!pio_sm_is_rx_fifo_empty(pio1, 0))                // PPU: フォントとロゴ(is_mmc3 = false)
-            *ppu_tx = ppu_access(*ppu_rx);
+            *ppu_tx = 0x80000000u | ppu_access(*ppu_rx);
         if (!pio_sm_is_rx_fifo_empty(pio0, 0)) {
             uint32_t r = nsf_cpu_access(*cpu_rx);
             if (r != NO_REPLY)
-                *cpu_tx = r;
+                *cpu_tx = r | 0x80000000u | (wr_pending ? 0x10000u : 0);
         }
     }
 }
@@ -394,6 +774,7 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     for (int i = 0; i < 8; i++)
         info->nsf_banked |= banks[i] != 0;
     uint32_t dlen = len - 0x80;
+    if (!dlen) return "NSF has no program data";
     uint32_t prog = p[0x7D] | p[0x7E] << 8 | p[0x7F] << 16;   // NSF2: 後ろにメタデータがある時の長さ
     if (p[5] >= 2 && prog && prog < dlen)
         dlen = prog;
@@ -402,7 +783,7 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     if (info->nsf_banked) {
         uint32_t pad = info->nsf_load & 0xFFF;
         nsf_nb = (pad + dlen + 0xFFF) / 0x1000;
-        if (nsf_nb * 0x1000 > ROM_MAX)
+        if (nsf_nb * 0x1000 > sizeof rom)
             return "NSF too large (> 384KB)";
         memset(rom, 0, nsf_nb * 0x1000);
         memcpy(rom + pad, data, dlen);
@@ -474,6 +855,9 @@ static uint rd_last_trow, rd_group;                       // 今のタイル行 
 static uint8_t rd_spr[0x1000];                            // スプライト($1000)のパターン: カーソル 4 タイル
 static uint8_t rd_io[0x100];                              // $5F00-$5FFF: 6502 が書くパッド・キーボード
 static const uint8_t *rd_prg;                             // 6502 のプログラム(16KB、$8000 と $C000 に同じもの)
+#if FC_REMOTE_FULL
+#include "remote_full.h"
+#endif
 
 static inline __attribute__((always_inline)) uint32_t remote_ppu_access(uint32_t v) {
     stat_ppu++;
@@ -525,6 +909,9 @@ static inline __attribute__((always_inline)) uint32_t remote_cpu_access(uint32_t
     }
     if (!(v & B_ROMSEL))                                      // $8000-$FFFF: 6502 のプログラム
         return 0xFF00u | rd_prg[a & 0x3FFF];
+#if FC_REMOTE_FULL
+    if((a&0x7c00)==0x6000)return 0xff00u|rd_nt[a&1023];
+#endif
     switch (a & 0x7F00) {
     case 0x5D00: return 0xFF00u | ((a & 0xFF) < 32 ? rd_meta_front->pal[a & 0x1F] : rd_meta_front->attr[((a & 0xFF) - 32) & 63]);
     case 0x5E00: return 0xFF00u | rd_meta_front->oam[a & 0xFF];
@@ -535,15 +922,16 @@ static inline __attribute__((always_inline)) uint32_t remote_cpu_access(uint32_t
 
 #ifndef CART_HOST
 static void __not_in_flash_func(remote_bus_loop)(void) {
+    __dmb(); bus_ready = true;
     io_ro_32 *cpu_rx = &pio0->rxf[0], *ppu_rx = &pio1->rxf[0];
     io_wo_32 *cpu_tx = &pio0->txf[0], *ppu_tx = &pio1->txf[0];
     for (;;) {
-        if (!pio_sm_is_rx_fifo_empty(pio1, 0))
-            *ppu_tx = remote_ppu_access(*ppu_rx);
+        if (!FC_REMOTE_DMA && !pio_sm_is_rx_fifo_empty(pio1, 0))
+            *ppu_tx = 0x80000000u | remote_ppu_access(*ppu_rx);
         if (!pio_sm_is_rx_fifo_empty(pio0, 0)) {
             uint32_t r = remote_cpu_access(*cpu_rx);
             if (r != NO_REPLY)
-                *cpu_tx = r;
+                *cpu_tx = r | 0x80000000u | (wr_pending ? 0x10000u : 0);
         }
     }
 }
@@ -569,7 +957,9 @@ static void rd_text(uint8_t *fb, int row, int col, const char *s) {   // NSF の
 static const char *remote_load(cart_info_t *info) {
     memset(info, 0, sizeof *info);
     info->is_remote = true;
-    rd_prg = remote_prg;
+    // Keep deadline-critical 6502 reads in SRAM, as in the working game path.
+    memcpy(rom+2*RD_FB_SIZE,remote_prg,sizeof remote_prg);
+    rd_prg = rom+2*RD_FB_SIZE;
     rd_fb_front = rom;
     rd_fb_back = rom + RD_FB_SIZE;
     memset(rom, 0, 2 * RD_FB_SIZE);
@@ -583,6 +973,14 @@ static const char *remote_load(cart_info_t *info) {
     rd_last_trow = rd_group = 0;
     memset(rd_spr, 0, sizeof rd_spr);
     memcpy(rd_spr, remote_spr_chr, sizeof remote_spr_chr);
+#if FC_REMOTE_FULL
+    memset(rd_cached_valid,0,sizeof rd_cached_valid);
+#endif
+#if FC_REMOTE_DMA
+    // Initial DMA table is built before enabling either bus.
+    for(uint a=0;a<8192;a++)diag_chr_lookup[a]=0xff00u;
+    for(uint a=0;a<4096;a++)diag_chr_lookup[4096+a]=0xff00u|rd_spr[a];
+#endif
     memset(rd_io, 0xFF, sizeof rd_io);
     rd_io[0] = 0;
     is_remote = true;
@@ -592,6 +990,10 @@ static const char *remote_load(cart_info_t *info) {
     is_mmc3 = false;
     mir = -1;
     set_mirror(MIR_V);                                        // どれでもよい(ネームテーブルは 2 画面とも同じ並び)
+#if FC_REMOTE_DMA
+    memcpy(rd_fb_back,rd_fb_front,RD_FB_SIZE);
+    cart_remote_commit(rd_meta_front->pal,rd_meta_front->attr,0,0,false);
+#endif
     return NULL;
 }
 
@@ -599,9 +1001,31 @@ static const char *remote_load(cart_info_t *info) {
 uint8_t *cart_remote_back(void) { return rd_ready ? NULL : rd_fb_back; }
 // 裏の絵を書き終えたら、パレット 32・属性 64・カーソル(x, y、visible)を付けて渡す。次の画面の切れ目で表示される
 void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, int cy, bool visible) {
+#if FC_REMOTE_FULL
+    remote_full_convert(rd_fb_back);
+    // The last NT chunk also carries all 64 per-16x16 palette attributes.
+    memcpy(rd_nt+960,attr,64);
+#elif FC_REMOTE_DMA
+    // Grayscale trial: sample 256x240 into 128x120, 240 unique tiles.
+    // In-place CHR updates can tear; they cannot delay a bus response.
+    for(uint ty=0;ty<15;ty++)for(uint tx=0;tx<16;tx++)
+        for(uint y=0;y<8;y++)for(uint p=0;p<2;p++) {
+            uint8_t bits=0;
+            for(uint x=0;x<8;x++) {
+                uint sx=(tx*8+x)*2,sy=(ty*8+y)*2;
+                uint8_t b=rd_fb_back[(sy*32+(sx>>3))*2+p];
+                bits|=((b>>(7-(sx&7)))&1u)<<(7-x);
+            }
+            diag_chr_lookup[(ty*16+tx)*16+y+p*8]=0xff00u|bits;
+        }
+    cx=64+cx/2;cy=56+cy/2;
+#endif
     rd_meta_t *m = rd_meta_back;
     memcpy(m->pal, pal, 32);
     memcpy(m->attr, attr, 64);
+#if FC_REMOTE_DMA && !FC_REMOTE_FULL
+    memset(m->attr,0,64);
+#endif
     memset(m->oam, 0xF0, sizeof m->oam);
     if (visible) {
         for (int i = 0; i < 4; i++) {
@@ -616,7 +1040,12 @@ void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, i
 #ifndef CART_HOST
     __dmb();
 #endif
+#if FC_REMOTE_DMA
+    rd_meta_t *old=rd_meta_front;rd_meta_front=rd_meta_back;rd_meta_back=old;
+    rd_ready=false;
+#else
     rd_ready = true;
+#endif
 }
 // 6502 が書いたパッド・キーボード: [0] パッド、[1..9] キーボード 9 行、[15] フレームの数
 void cart_remote_io(uint8_t out[16]) { memcpy(out, rd_io, 16); }
@@ -637,6 +1066,15 @@ const char *cart_mapper_name(int m) {
 }
 
 static void reset_map(const cart_info_t *info) {
+#ifdef CART_HOST
+    host_timed_a12=false;host_a12_high=false;host_a12_low_m2=0;
+#endif
+    wr_pending = false; ppu_v = ppu_t = 0; ppu_w = false; ppu_inc = 1;
+    cyc = 0; m1_last_cyc = UINT32_MAX - 1;
+    m1_chr0 = m1_chr1 = m1_prg = 0;
+    m3_latch = m3_count = 0; a12_low = 0; gpio_put(PIN_IRQ, 0);
+    wram_enabled = true; wram_protected = false;
+    memset(wram, 0, sizeof wram); memset(chr_ram, 0, sizeof chr_ram);
     is_nsf = false;
     is_remote = false;
     is_menu = false;
@@ -644,6 +1082,9 @@ static void reset_map(const cart_info_t *info) {
     is_mmc3 = mapper == 4;
     prg = rom;
     prg_size = info->prg_size;
+#if FC_DIAG_MMC3_GAME
+    m3_prg_mask=(prg_size>>13)-1;
+#endif
     chr_is_ram = info->chr_size == 0;
     chr = chr_is_ram ? chr_ram : rom + prg_size;
     chr_size = chr_is_ram ? sizeof chr_ram : info->chr_size;
@@ -655,8 +1096,10 @@ static void reset_map(const cart_info_t *info) {
     case 1: m1_shift = 0x10; m1_ctrl = 0x0C; mmc1_update(); break;
     case 4:
         m3_sel = 0;
-        memcpy(m3_r, (const uint8_t[8]){0, 2, 4, 5, 6, 7, 0, 1}, 8);
-        m3_irq_en = m3_reload = false;
+        for(uint i=0;i<8;i++)m3_r[i]=(const uint8_t[8]){0, 2, 4, 5, 6, 7, 0, 1}[i];
+        m3_irq_en = false;
+        atomic_store_explicit(&m3_reload_requested,0,memory_order_relaxed);
+        m3_reload_handled=0;
         mmc3_update();
         break;
     case 7: prg32(0); break;
@@ -673,6 +1116,11 @@ const char *cart_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     if (len < 16 || memcmp(p, "NES\x1A", 4) != 0)
         return "not an iNES / NSF file";
     bool nes2 = (p[7] & 0x0C) == 0x08;
+    if (p[6] & 8) return "four-screen VRAM not supported";
+    if (nes2 && (p[8] || p[10] || p[11] || p[12] || p[13] || p[14] || p[15]))
+        return "NES 2.0 extensions not supported";
+    if (nes2 && ((p[9] & 15) == 15 || (p[9] >> 4) == 15))
+        return "NES 2.0 exponent size not supported";
     uint32_t prg_n = p[4], chr_n = p[5];
     if (nes2) {
         prg_n |= (p[9] & 0x0F) << 8;
@@ -687,7 +1135,7 @@ const char *cart_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     uint32_t off = 16 + ((p[6] & 4) ? 512 : 0);       // トレーナーは読み飛ばす
     if (info->prg_size == 0)
         return "PRG size is 0";
-    if (info->prg_size + info->chr_size > ROM_MAX)
+    if (info->prg_size + info->chr_size > sizeof rom)
         return "ROM too large (PRG + CHR > 384KB)";
     if (off + info->prg_size + info->chr_size > len)
         return "file is shorter than the header says";
@@ -703,7 +1151,30 @@ void cart_load_fallback(cart_info_t *info) {
     info->prg_size = 0x8000;
     info->chr_size = 0x2000;
     for (uint32_t i = 0; i < 0x8000; i++)
-        rom[i] = chr_test_rom[i % sizeof chr_test_rom];
+        rom[i] =
+#if FC_DIAG_IMAGE
+            static_image_prg[i % sizeof static_image_prg];
+#else
+            chr_test_rom[i % sizeof chr_test_rom];
+#endif
+#if FC_DIAG_CPU_ONLY
+    // Silence the known test ROM's APU enable; preserve its CPU test loop.
+    for (uint i=0; i+4<0x8000; i++)
+        if (!memcmp(rom+i, (const uint8_t[]){0xA9,1,0x8D,0x15,0x40},5)) rom[i+1]=0;
+#if FC_DIAG_DIRECT_CHR && !FC_DIAG_IMAGE
+    // Built-in ROM listing: paltab at $C07B, mirrored at $807B.
+    // All four attribute palettes identical: black/white/gray/black.
+    // This removes the old coloured-block layout as a visual ambiguity.
+    for (uint bank=0; bank<2; bank++)
+        for (uint k=0; k<16; k++)
+            rom[bank*0x4000 + 0x7b + k] =
+#if FC_DIAG_DMA_CHR
+                (k%4==3)?0x30:0x0f;
+#else
+                (const uint8_t[]){0x0f,0x30,0x10,0x0f}[k%4];
+#endif
+#endif
+#endif
     uint8_t *c = rom + 0x8000;          // タイル t = 下位2ビットの色、上辺と左端は色1
     for (uint t = 0; t < 256; t++) {
         for (uint r = 0; r < 8; r++) {
@@ -714,6 +1185,9 @@ void cart_load_fallback(cart_info_t *info) {
             c[t * 16 + 8 + r] = c[0x1000 + t * 16 + 8 + r] = p1;
         }
     }
+#if FC_DIAG_IMAGE
+    memcpy(c,static_image_chr,8192);
+#endif
     reset_map(info);
 }
 
@@ -752,7 +1226,23 @@ void cart_load_menu(const lib_entry_t *e, int count, cart_info_t *info) {
 int cart_menu_choice(void) { return menu_choice; }
 
 #ifndef CART_HOST
+#if FC_DIAG_SPLIT
+#include "split_diag.h"
+#endif
+#if FC_DIAG_LIVE
+#include "hardware/irq.h"
+#include "live_diag.h"
+#endif
 void cart_start(void) {
+#if FC_DIAG_MMC3_GAME
+    // Prioritize deadline-critical CPU/PPU access over core0's CHR-table copies.
+    busctrl_hw->priority=BUSCTRL_BUS_PRIORITY_PROC1_BITS |
+        BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS;
+    while(!(busctrl_hw->priority_ack&BUSCTRL_BUS_PRIORITY_ACK_BITS))tight_loop_contents();
+#endif
+#if FC_DIAGNOSTIC
+    puts("diag: cart_start entered");
+#endif
     gpio_init(PIN_IRQ);
     gpio_put(PIN_IRQ, 0);
     gpio_set_dir(PIN_IRQ, GPIO_OUT);
@@ -765,14 +1255,86 @@ void cart_start(void) {
     int m = mir;
     mir = -1;
     set_mirror(m);                                           // reset_map で決めたミラーリングを PIO に反映
+#if FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR
+    if(!is_mmc3)rd_width_program_init(pio2,1,pio_add_program(pio2,&rd_width_program));
+#endif
+#if !FC_DIAG_MMC3_NO_IRQ
+    if (is_mmc3)
+        mmc3_a12_program_init(pio2, 1, pio_add_program(pio2, &mmc3_a12_program));
+#if FC_DIAG_MMC3_GAME
+    if(is_mmc3)mmc3_irq_core0_init();
+#endif
+#endif
+#if FC_REMOTE_DMA
+    ppu_lookup_program_init(pio1,0,pio_add_program(pio1,&ppu_lookup_program),(uint32_t)diag_chr_lookup);
+    diag_dma_chr_init(NULL);
+#elif FC_DIAG_DIRECT_CHR
+#if FC_DIAG_DMA_CHR
+    ppu_lookup_program_init(pio1,0,pio_add_program(pio1,&ppu_lookup_program),(uint32_t)diag_chr_lookup);
+    diag_dma_chr_init(chr);
+#else
+    ppu_constant_program_init(pio1,0,pio_add_program(pio1,&ppu_constant_program));
+#endif
+#else
     ppu_chr_program_init(pio1, 0, pio_add_program(pio1, &ppu_chr_program));
+#endif
     cpu_m2_program_init(pio0, 0, pio_add_program(pio0, &cpu_m2_program));
+#if FC_DIAGNOSTIC
+    puts("diag: PIO configured, starting core1");
+#endif
+    bus_ready = false;
+#if FC_DIAG_SPLIT
+    save_and_disable_interrupts();
+    multicore_launch_core1(bus_loop);
+#else
     multicore_launch_core1(is_remote ? remote_bus_loop : is_nsf ? nsf_bus_loop : bus_loop);
+#endif
+    while (!bus_ready) tight_loop_contents();
+    __dmb();
+#if FC_DIAG_LIVE && !FC_DIAG_DIRECT_CHR
+    live_ppu_irq_init();
+#endif
+#if !FC_DIAG_CPU_ONLY || FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR
+    pio_sm_set_enabled(pio1, 0, true);
+#endif
+    pio_sm_set_enabled(pio0, 0, true);
+#if FC_DIAG_SPLIT
+    split_ppu_loop(); // core0 PPU-only, core1 uses proven CPU-only service
+#endif
+#if FC_DIAGNOSTIC
+    puts("diag: core1 ready, bus PIO enabled");
+#endif
+#if FC_DIAG_MMC3_GAME
+    // Foreground on core0; core1 serves CPU and qualified A12 events.
+    mmc3_chr_background_loop();
+#endif
 }
 #else
 // PC の試験台から呼ぶ入口(PIO のサンプルと同じ形の値を渡し、答えを受け取る)
-uint32_t cart_host_cpu(uint32_t v) { return is_remote ? remote_cpu_access(v) : is_nsf ? nsf_cpu_access(v) : cpu_access(v); }
+uint32_t cart_host_cpu(uint32_t v) {
+#if FC_DIAG_MMC3_GAME
+    if(!chr_is_ram) {
+    if(wr_pending) {
+        diag_nrom_bookkeeping(v);
+        // Host comparison has instantaneous CHR mapping, no core0-copy timing.
+        for(uint reg=0;reg<6;reg++)mmc3_fast_chr(reg);
+        return NO_REPLY;
+    }
+    if(!(v&B_RW)){diag_nrom_bookkeeping(v);return 0;}
+    }
+#endif
+    return is_remote ? remote_cpu_access(v) : is_nsf ? nsf_cpu_access(v) : cpu_access(v);
+}
 uint32_t cart_host_ppu(uint32_t v) { return is_remote ? remote_ppu_access(v) : ppu_access(v); }
+void cart_host_a12_address(uint16_t addr,uint64_t ppu_ticks) {
+    host_timed_a12=true;
+    if(!is_mmc3)return;
+    bool high=(addr&0x1000)!=0;
+    uint64_t m2=ppu_ticks/3;
+    if(!high && host_a12_high)host_a12_low_m2=m2;
+    if(high && !host_a12_high && m2-host_a12_low_m2>=3)mmc3_clock();
+    host_a12_high=high;
+}
 int cart_host_mirror(void) { return mir; }
 uint8_t cart_host_peek_chr(uint a) {
     if (is_remote)                      // 画面転送: スプライトだけ(背景は位置を数える読み出しで描く)

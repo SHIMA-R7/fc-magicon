@@ -1,0 +1,46 @@
+; Diagnostic SRAM lookup via DMA: X permanently holds aligned table address >>15.
+; IN_BASE=26, JMP_PIN=/RD=40. Each table entry is FF00 | CHR_byte.
+.program ppu_lookup
+    pull block
+    mov x, osr
+.wrap_target
+start:
+    wait 1 pin 14
+    mov isr, pins
+sample:
+    mov y, isr
+    mov isr, pins
+    jmp pin sample
+    mov isr, x
+    in y, 13
+    in null, 2
+    push block            ; start DMA BEFORE classifying A13; never drive yet
+    mov osr, y
+    out null, 16
+    out y, 1
+    jmp !y pattern
+    pull block            ; discard nametable lookup result; keep bus input
+    jmp start
+pattern:
+    pull block            ; DMA supplies exactly one table entry
+    jmp pin start         ; discard a late answer while remaining input
+    out pins, 8
+    out pindirs, 8
+    wait 1 pin 14
+    mov osr, null
+    out pindirs, 8
+.wrap
+% c-sdk {
+static inline void ppu_lookup_program_init(PIO pio,uint sm,uint offset,uint32_t table) {
+    pio_sm_config c=ppu_lookup_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,26);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_out_pins(&c,26,8);
+    sm_config_set_in_shift(&c,false,false,32);
+    sm_config_set_out_shift(&c,true,false,32);
+    for(uint i=26;i<34;i++)pio_gpio_init(pio,i);
+    pio_sm_set_consecutive_pindirs(pio,sm,26,8,false);
+    pio_sm_init(pio,sm,offset,&c);
+    pio_sm_put(pio,sm,table>>15);
+}
+%}

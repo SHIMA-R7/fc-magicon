@@ -8,6 +8,7 @@
 // 安全のため、起動直後はバスのピンを全部入力(プル無し)にし、
 // 本体の 5V(GPIO46、R2/R3 の分圧)を確認するまで PIO を動かさない。
 #include <stdio.h>
+#include "../power_guard.h"
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/pio.h"
@@ -66,23 +67,21 @@ int main(void) {
     vreg_set_voltage(VREG_VOLTAGE_1_20);             // 250MHz で回すため少し電圧を上げる
     sleep_ms(10);
     set_sys_clock_khz(250000, true);
-    stdio_init_all();
-
-    // 本体の電源が入るまで待つ(USB だけの時にバスへ出力しない)
-    while (!gpio_get(PIN_FC_5V)) {
-        gpio_xor_mask64(1ull << PIN_LED);
-        sleep_ms(100);
-        printf("waiting for Famicom 5V (GPIO46)...\n");
-    }
-    gpio_put(PIN_LED, 0);
 
     for (uint i = 0; i < sizeof rom; i++)            // 16KB/32KB どちらのイメージでも 32KB に広げる
         rom[i] = test_rom[i % sizeof test_rom];
+
+    bool usb_prepared = !gpio_get(PIN_FC_5V);
+    if (usb_prepared) stdio_init_all();
+    fc_wait_power();
+    fc_arm_power_guard();
+    gpio_put(PIN_LED, 0);
 
     pio_set_gpio_base(pio0, 0);                      // CPU 用ブロックは GPIO0-31
     uint offset = pio_add_program(pio0, &cpu_bus_program);
     cpu_bus_program_init(pio0, 0, offset);
     multicore_launch_core1(cpu_bus_loop);
+    if (!usb_prepared) stdio_init_all();
 
     printf("FC-MAGICON bus_test: serving test ROM at 250MHz\n");
     uint32_t last_r = 0, last_w = 0;

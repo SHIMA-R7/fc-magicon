@@ -21,7 +21,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 from asm6502 import Asm   # noqa: E402
 
+FULL = "--full" in sys.argv
+COMPACT = "--compact" in sys.argv or FULL
+
 PAL, ATTR, OAM, IO = 0x5D00, 0x5D20, 0x5E00, 0x5F00
+if "--emulator" in sys.argv:
+    PAL, ATTR, OAM, IO = 0x6400, 0x6420, 0x6500, 0x6600
+
 PAD, KB, FRAME = IO, IO + 1, IO + 0x0F
 ROW, TMP, NTC = 0x00, 0x01, 0x02                   # ゼロページ(このプログラムだけが使う)
 # キーボードの列を選んでから読むまでの待ち。nesdev は約 50 サイクルだが、前に作った拡張端子 ⇔ USB 変換器
@@ -36,6 +42,7 @@ a = Asm(0xC000)
 a.label("reset")
 a.sei(); a.cld(); a.ldx_imm(0xFF); a.txs()
 a.lda_imm(0); a.sta(0x2000); a.sta(0x2001); a.sta(0x4010)
+if FULL: a.sta_zp(3)
 a.lda_imm(0x40); a.sta(0x4017)                     # APU のフレーム IRQ を止める
 a.label("vbl1"); a.bit(0x2002); a.bpl("vbl1")
 a.label("vbl2"); a.bit(0x2002); a.bpl("vbl2")
@@ -46,14 +53,20 @@ a.label("pal"); a.lda_absx(PAL); a.sta(0x2007); a.inx(); a.cpx_imm(32); a.bne("p
 a.lda_imm(0x20); a.sta(0x2006); a.lda_imm(0x00); a.sta(0x2006)
 a.lda_imm(2); a.sta_zp(NTC)
 a.label("nt")
-a.lda_imm(0); a.sta_zp(ROW)
-a.label("row")
-a.lda_zp(ROW); a.and_imm(7); a.asl_a(); a.asl_a(); a.asl_a(); a.asl_a(); a.asl_a(); a.sta_zp(TMP)
-a.ldx_imm(0)
-a.label("col"); a.txa(); a.ora_zp(TMP); a.sta(0x2007); a.inx(); a.cpx_imm(32); a.bne("col")
-a.inc_zp(ROW); a.lda_zp(ROW); a.cmp_imm(30); a.bne("row")
-a.lda_imm(0); a.ldx_imm(64)
-a.label("attr0"); a.sta(0x2007); a.dex(); a.bne("attr0")
+if COMPACT:
+    for page in range(4):
+        a.ldx_imm(0)
+        label=f"compact_nt_{page}"
+        a.label(label); a.lda_absx((0x6000 if FULL else 0xF000)+page*256); a.sta(0x2007); a.inx(); a.bne(label)
+else:
+    a.lda_imm(0); a.sta_zp(ROW)
+    a.label("row")
+    a.lda_zp(ROW); a.and_imm(7); a.asl_a(); a.asl_a(); a.asl_a(); a.asl_a(); a.asl_a(); a.sta_zp(TMP)
+    a.ldx_imm(0)
+    a.label("col"); a.txa(); a.ora_zp(TMP); a.sta(0x2007); a.inx(); a.cpx_imm(32); a.bne("col")
+    a.inc_zp(ROW); a.lda_zp(ROW); a.cmp_imm(30); a.bne("row")
+    a.lda_imm(0); a.ldx_imm(64)
+    a.label("attr0"); a.sta(0x2007); a.dex(); a.bne("attr0")
 a.dec_zp(NTC); a.bne("nt")
 a.label("vbl3"); a.bit(0x2002); a.bpl("vbl3")
 a.lda_imm(0x20); a.sta(0x2006); a.lda_imm(0x00); a.sta(0x2006); a.sta(0x2005); a.sta(0x2005)
@@ -68,9 +81,25 @@ a.bit(0x2002)
 a.lda_imm(0x3F); a.sta(0x2006); a.lda_imm(0x00); a.sta(0x2006)
 for i in range(32):                                                  # パレット 32(展開して 1 バイト 8 サイクル)
     a.lda_abs(PAL + i); a.sta(0x2007)
-a.lda_imm(0x23); a.sta(0x2006); a.lda_imm(0xC0); a.sta(0x2006)
-for i in range(64):                                                  # 属性テーブル 64
-    a.lda_abs(ATTR + i); a.sta(0x2007)
+if FULL:
+    # Copy 128 NT bytes per VBlank; spread all 1024 bytes across eight frames.
+    for chunk in range(8):
+        if chunk<7:
+            a.lda_zp(3); a.cmp_imm(chunk); a.bne(f"nt_next_{chunk}"); a.jmp(f"nt_choose_{chunk}"); a.label(f"nt_next_{chunk}")
+    a.jmp("nt_choose_7")
+    for chunk in range(8):
+        a.label(f"nt_choose_{chunk}")
+        addr=0x2000+chunk*128
+        a.lda_imm(addr>>8); a.sta(0x2006); a.lda_imm(addr&255); a.sta(0x2006)
+        for i in range(128):
+            a.lda_abs(0x6000+chunk*128+i); a.sta(0x2007)
+        a.jmp("nt_copy_done")
+    a.label("nt_copy_done")
+    a.inc_zp(3); a.lda_zp(3); a.and_imm(7); a.sta_zp(3)
+else:
+    a.lda_imm(0x23); a.sta(0x2006); a.lda_imm(0xC0); a.sta(0x2006)
+    for i in range(64):                                                  # 属性テーブル 64
+        a.lda_abs(ATTR + i); a.sta(0x2007)
 a.lda_imm(0x20); a.sta(0x2006); a.lda_imm(0x00); a.sta(0x2006)      # v = $2000(次のフレームの最初は行 0)
 a.sta(0x2005); a.sta(0x2005)
 a.lda_imm(CTRL); a.sta(0x2000)
@@ -99,25 +128,31 @@ a.label("irq"); a.rti()
 
 prg, listing = a.build(0x4000, {"nmi": "nmi", "reset": "reset", "irq": "irq"})
 
-# マウスカーソル(矢印、16 x 16 = 4 タイル: 0 左上、1 右上、2 左下、3 右下)。色 1 = 白、色 3 = 黒のふち
+if COMPACT:
+    nt=bytearray([240]*960+[0]*64)
+    for row in range(15):
+        for col in range(16):
+            nt[(row+7)*32+col+8]=row*16+col
+    prg=bytearray(prg)
+    prg[0x3000:0x3400]=nt
+
+# 12 x 12 arrow inside the existing 16 x 16 four-sprite layout.
+# Transparent padding keeps the OAM layout and top-left hotspot unchanged.
 ARROW = [
-    "3...............",
-    "33..............",
-    "313.............",
-    "3113............",
-    "31113...........",
-    "311113..........",
-    "3111113.........",
-    "31111113........",
-    "311111113.......",
-    "3111111113......",
-    "31111133333.....",
-    "3113113.........",
-    "313.3113........",
-    "33..3113........",
-    "3....3113.......",
-    ".....3333.......",
+    "3...........",
+    "33..........",
+    "313.........",
+    "3113........",
+    "31113.......",
+    "311113......",
+    "3111113.....",
+    "31111113....",
+    "311333333...",
+    "313.313.....",
+    "33...313....",
+    "3....333....",
 ]
+ARROW = [row.ljust(16, '.') for row in ARROW] + ['.' * 16] * 4
 spr = bytearray(64)
 for t, (ty, tx) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
     for y in range(8):
@@ -133,7 +168,8 @@ def arr(name, data):
         lines.append("    " + ", ".join(f"0x{x:02X}" for x in data[i:i + 16]) + ",")
     return "\n".join(lines + ["};"])
 
-with open(os.path.join(HERE, "remote_driver.h"), "w", encoding="utf-8") as f:
+output = ("remote_full_emulator_driver.h" if FULL else "remote_emulator_driver.h") if "--emulator" in sys.argv else "remote_full_driver.h" if FULL else "remote_compact_driver.h" if COMPACT else "remote_driver.h"
+with open(os.path.join(HERE, output), "w", encoding="utf-8") as f:
     f.write("// gen_remote_driver.py が作った画面転送モードの 6502 プログラム($C000-、16KB)とカーソルの CHR。手で直さない\n")
     f.write("#pragma once\n#include <stdint.h>\n\n")
     for k, v in (("RD_PAL", PAL), ("RD_ATTR", ATTR), ("RD_OAM", OAM), ("RD_IO", IO)):
