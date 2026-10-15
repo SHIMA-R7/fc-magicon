@@ -1,0 +1,40 @@
+; Qualify A12 low across FOUR M2 falling edges (diagnostic comparison only). PIO2 SM1.
+; IN_BASE=M2(GPIO25), JMP_PIN=A12(GPIO38). No bus outputs.
+.program mmc3_a12
+.wrap_target
+reset:
+    set x, 3
+high:
+    jmp pin reset
+    mov isr, null
+    in pins, 1
+    mov y, isr
+    jmp !y high
+low:
+    jmp pin reset
+    mov isr, null
+    in pins, 1
+    mov y, isr
+    jmp !y falling
+    jmp low
+falling:
+    jmp x-- high
+qualified:
+    jmp pin edge
+    jmp qualified
+edge:
+    set y, 1
+    mov isr, y
+    push noblock
+.wrap
+% c-sdk {
+static inline void mmc3_a12_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = mmc3_a12_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, 25);
+    sm_config_set_jmp_pin(&c, 38);
+    sm_config_set_in_shift(&c, false, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

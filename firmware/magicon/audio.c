@@ -66,6 +66,17 @@ static void put(int16_t s) {
     ring[wr_abs & RING_MASK] = (uint16_t)(((int32_t)s + 32768) >> 6);   // -32768..32767 → 0..1023
     wr_abs++;
 }
+unsigned audio_local_space(void) {
+    if(dma_ch<0)return 0;
+    audio_poll();
+    if((int32_t)(wr_abs-rd_abs)<16)wr_abs=rd_abs+64;
+    uint32_t queued=wr_abs-rd_abs;
+    return queued<128 ? 128-queued : 0;
+}
+void audio_local_write(const int16_t *samples,unsigned n) {
+    unsigned space=audio_local_space();if(n>space)n=space;
+    for(unsigned i=0;i<n;i++)put(samples[i]);
+}
 
 // 書き始める前に、書く所が鳴らす所より先か(足りない = 途切れた → 100ms 先へ)、溜まり過ぎていないか(→ 捨てる)
 static bool make_room(void) {

@@ -2,6 +2,7 @@
 #define FC_DIAG_CPU_ONLY 1
 #define FC_DIAG_NROM_GAME 1
 #define FC_DIAG_MMC3_GAME 1
+#undef NDEBUG
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>

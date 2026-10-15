@@ -13,8 +13,8 @@ NSF プレイヤーのドライバー(6502)・画面の土台・フォントと�
 
 動作:
   リセット → パレット・画面を出す → 曲を始める(APU を黙らせ、RAM と $6000-$7FFF を 0 にし、バンクを戻し、INIT を呼ぶ)
-  → NMI(約 60Hz)ごとに PLAY を呼び、パッドを読む。
-  ←→ = 前 / 次の曲、A = 最初から、START = 一時停止(APU を止める)。曲を変える時は NMI の外(メインループ)でやり直す。
+  → M2周期タイマーをメインループで読み PLAY を呼ぶ。NMIはパッド・画面だけ。
+  ←→ = 前 / 次の曲、A = 最初から、START = 停止 / 先頭から再生。
 """
 import os
 import sys
@@ -32,7 +32,7 @@ COUNT, START, BANKS = PARAM, PARAM + 1, PARAM + 8
 # 画面(32 x 30 タイル)
 ROW_LOGO, COL_LOGO = 3, 7
 ROW_TITLE, ROW_ARTIST, ROW_COPY = 9, 11, 13
-ROW_SONG, COL_SONG = 17, 9                          # "SONG  00 / 00"
+ROW_SONG, COL_SONG = 17, 8                          # "SONG  000 / 000"
 ROW_PAUSE, COL_PAUSE = 19, 13
 LOGO_W, LOGO_H = 17, 2
 LOGO_TILE0 = 0x80
@@ -58,6 +58,7 @@ for page in range(4):
 a.lda_abs(START); a.sta(CUR)
 
 a.label("start_song")                                  # メインループから来る(スタックは使い捨てでよい)
+a.lda_imm(0); a.sta(0x5F03)                         # stop PLAY timer before INIT
 a.lda_imm(0); a.sta(0x2000); a.sta(0x2001); a.sta(REQ); a.sta(PAUSED); a.sta(DRAWPAUSE); a.sta(INNMI)
 a.ldx_imm(0)
 a.label("apu"); a.sta_absx(0x4000); a.inx(); a.cpx_imm(0x14); a.bne("apu")    # $4000-$4013 = 0
@@ -74,22 +75,29 @@ a.inx(); a.bne("wram")
 a.ldx_imm(0xFF); a.txs()
 a.ldx_imm(0)
 a.label("bank"); a.lda_absx(BANKS); a.sta_absx(0x5FF8); a.inx(); a.cpx_imm(8); a.bne("bank")
-for addr, src in ((nt_addr(ROW_SONG, COL_SONG + 6), CUR), (nt_addr(ROW_SONG, COL_SONG + 11), COUNT)):
+for addr, src in ((nt_addr(ROW_SONG, COL_SONG + 6), CUR), (nt_addr(ROW_SONG, COL_SONG + 12), COUNT)):
     a.lda_imm(addr >> 8); a.sta(0x2006); a.lda_imm(addr & 0xFF); a.sta(0x2006)
     a.lda_abs(src); a.jsr("put2")
 p = nt_addr(ROW_PAUSE, COL_PAUSE)
 a.lda_imm(p >> 8); a.sta(0x2006); a.lda_imm(p & 0xFF); a.sta(0x2006)
 a.lda_imm(0x20); a.ldx_imm(5)
 a.label("unpause"); a.sta(0x2007); a.dex(); a.bne("unpause")
-a.ldx_abs(CUR); a.dex(); a.txa(); a.ldx_imm(0)       # A = 曲番号(0〜)、X = 0(NTSC)
+a.ldx_abs(CUR); a.dex(); a.txa(); a.ldx_imm(0); a.ldy_imm(0)
 a.jsr("init_tramp")
+a.lda_imm(1); a.sta(0x5F03)                         # arm requested NSF period after INIT
 a.label("vbl3"); a.bit(0x2002); a.bpl("vbl3")        # 表示を戻すのは VBlank の中で
 a.lda_imm(0); a.sta(0x2005); a.sta(0x2005)
 a.lda_imm(0x80); a.sta(0x2000)                         # NMI を有効に
 a.lda_imm(0x0A); a.sta(0x2001)                         # 背景を表示(左端 8 ドットも)
-a.label("main"); a.lda_abs(REQ); a.beq("main"); a.jmp("start_song")
+a.label("main"); a.lda_abs(REQ); a.beq("main_tick"); a.jmp("start_song")
+a.label("main_tick"); a.lda_abs(PAUSED); a.bne("main")
+a.lda_abs(0x5F02); a.beq("main")
+a.jsr("play_tramp"); a.jmp("main")
 
-a.label("put2")                                        # A(0〜99)を 10 進 2 桁で $2007 へ
+a.label("put2")                                        # A(0〜255)を 10 進 3 桁で $2007 へ
+a.ldx_imm(0x30)
+a.label("hundreds"); a.cmp_imm(100); a.bcc("hundreds_done"); a.sbc_imm(100); a.inx(); a.bne("hundreds")
+a.label("hundreds_done"); a.stx(0x2007)
 a.ldx_imm(0x30)
 a.label("p2"); a.cmp_imm(10); a.bcc("p2d"); a.sbc_imm(10); a.inx(); a.bne("p2")
 a.label("p2d"); a.stx(0x2007); a.ora_imm(0x30); a.sta(0x2007); a.rts()
@@ -109,8 +117,6 @@ a.label("dp_clr"); a.lda_imm(0x20)
 a.label("dp_c"); a.sta(0x2007); a.inx(); a.cpx_imm(5); a.bne("dp_c")
 a.label("dp_end"); a.lda_imm(0); a.sta(0x2005); a.sta(0x2005); a.lda_imm(0x80); a.sta(0x2000)
 a.label("no_draw")
-a.lda_abs(PAUSED); a.bne("no_play")
-a.jsr("play_tramp")
 a.label("no_play")
 a.lda_imm(1); a.sta(0x4016); a.lda_imm(0); a.sta(0x4016)   # パッド: bit7 = A … bit0 = →
 a.ldx_imm(8)
@@ -118,7 +124,8 @@ a.label("pad"); a.lda_abs(0x4016); a.lsr_a(); a.rol_abs(PAD); a.dex(); a.bne("pa
 a.lda_abs(PREV); a.eor_imm(0xFF); a.and_abs(PAD); a.sta(NEW)
 a.lda_abs(PAD); a.sta(PREV)
 a.lda_abs(NEW); a.lsr_a(); a.bcc("not_right")           # → 次の曲
-a.inc_abs(CUR); a.lda_abs(CUR); a.cmp_abs(COUNT); a.beq("req"); a.bcc("req")
+a.inc_abs(CUR); a.lda_abs(CUR); a.beq("wrap_right"); a.cmp_abs(COUNT); a.beq("req"); a.bcc("req")
+a.label("wrap_right")
 a.lda_imm(1); a.sta(CUR); a.jmp("req")
 a.label("not_right")
 a.lda_abs(NEW); a.and_imm(0x02); a.beq("not_left")     # ← 前の曲
@@ -132,9 +139,14 @@ a.lda_abs(NEW); a.and_imm(0x10); a.beq("nmi_done")     # START = 一時停止 / 
 a.lda_abs(PAUSED); a.eor_imm(1); a.sta(PAUSED)
 a.lda_imm(1); a.sta(DRAWPAUSE)
 a.lda_abs(PAUSED); a.beq("resume")
-a.lda_imm(0); a.sta(0x4015); a.jmp("nmi_done")
-a.label("resume"); a.lda_imm(0x0F); a.sta(0x4015)
+a.lda_imm(0); a.sta(0x4015); a.sta(0x5F03); a.jmp("nmi_done")
+a.label("resume"); a.lda_imm(1); a.sta(REQ)           # hardware APU cannot restore length/DMC state: restart honestly
 a.label("nmi_done"); a.dec_abs(INNMI)
+a.lda_abs(REQ); a.beq("nmi_no_restart"); a.jmp("start_song")
+a.label("nmi_no_restart"); a.lda_abs(PAUSED); a.beq("nmi_out")
+# STOP deliberately abandons PLAY (including a non-returning PCM loop).
+# Restart runs INIT again, so no attempt is made to resume a half-executed routine.
+a.ldx_imm(0xFF); a.txs(); a.jmp("main")
 a.label("nmi_out")
 a.pla(); a.tay(); a.pla(); a.tax(); a.pla(); a.rti()
 
@@ -144,7 +156,7 @@ a.label("play_tramp"); a.jmp(0x0000)                   # 同じく PLAY
 a.label("paltab")
 a.bytes_([0x0F, 0x30, 0x11, 0x21,  0x0F, 0x21, 0x11, 0x30,  0x0F, 0x30, 0x11, 0x21,  0x0F, 0x30, 0x11, 0x21] * 2,
          "パレット(背景 0 = 白・青・水色、背景 1 = 水色の文字)")
-a.label("pausetxt"); a.bytes_(b"PAUSE", '"PAUSE"')
+a.label("pausetxt"); a.bytes_(b"STOP ", '"STOP"')
 
 code, listing = a.build(NT - BASE)
 code = bytes(code[:max(i for i, x in enumerate(code) if x != 0xEA) + 1])   # 後ろの詰め物(NOP)は要らない
@@ -199,9 +211,9 @@ for ty in range(LOGO_H):
     for tx in range(LOGO_W):
         nt[(ROW_LOGO + ty) * 32 + COL_LOGO + tx] = LOGO_TILE0 + ty * LOGO_W + tx
 put(6, "NSF PLAYER")
-put(ROW_SONG, "SONG  00 / 00", COL_SONG)
+put(ROW_SONG, "SONG  000 / 000", COL_SONG)
 put(23, "LEFT/RIGHT  SONG")
-put(25, "A  RESTART    START  PAUSE")
+put(25, "A RESTART  START STOP/RESTART")
 def attr_row(tile_row, pal):                     # そのタイル行を含む 16x16 の半分を背景パレット pal に
     r, half = tile_row // 4, (tile_row % 4) // 2
     for i in range(8):

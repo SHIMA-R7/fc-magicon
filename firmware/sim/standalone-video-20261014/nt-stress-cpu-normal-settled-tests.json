@@ -1,0 +1,12 @@
+{
+  "mode": "cpu-normal",
+  "rounds": 52,
+  "written_bytes": 106496,
+  "read_bytes": 213200,
+  "total_errors": 0,
+  "steps": 5545800,
+  "cpu_cycles": 17801771,
+  "hardware_verified": false,
+  "settle_ppu": true,
+  "first_ppuaddr_cycle": 52390
+}

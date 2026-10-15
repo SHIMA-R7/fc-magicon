@@ -1,0 +1,10 @@
+{
+  "mode": "cpu-normal",
+  "rounds": 52,
+  "written_bytes": 106496,
+  "read_bytes": 213200,
+  "total_errors": 0,
+  "steps": 5525200,
+  "cpu_cycles": 17750340,
+  "hardware_verified": false
+}

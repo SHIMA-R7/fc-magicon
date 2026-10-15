@@ -39,18 +39,30 @@ def nsf(src, data):
     print(f"  {songs} 曲(最初は {start})  load ${load:04X} init ${init:04X} play ${play:04X}"
           f"{'  バンク切り替えあり' if any(banks) else ''}  {len(data) - 0x80} バイト")
     ok = True
-    if not any(banks) and load < 0x8000:
+    if data[5] not in (1, 2) or (data[5] == 2 and data[0x7C]):
+        print("  ! unsupported NSF version / NSF2 execution flags"); ok = False
+    if not songs or init < 0x8000 or play < 0x8000 or init >= 0xFFFA or play >= 0xFFFA:
+        print("  ! invalid songs or unsupported INIT/PLAY address"); ok = False
+    if load < 0x8000:
         print("  ! load が $8000 より下(まだ対応していない)")
         ok = False
-    if any(banks) and (load & 0xFFF) + len(data) - 0x80 > ROM_MAX:
+    program = int.from_bytes(data[0x7D:0x80], "little") if data[5] == 2 else 0
+    dlen = len(data)-128
+    if program > dlen:
+        print("  ! truncated NSF2 program"); ok = False
+    if program: dlen = min(program,dlen)
+    if any(banks) and (((load & 0xFFF) + dlen + 4095) // 4096) * 4096 > ROM_MAX:
         print(f"  ! {ROM_MAX // 1024}KB を超える")
         ok = False
-    if exp:
-        print(f"  (拡張音源 {', '.join(exp)} は、まだ鳴らない。本体の 2A03 の音だけ出る)")
-    if speed and abs(speed - 16639) > 200:
-        print(f"  (再生の間隔 {speed}us。magicon は VBlank(約 16639us)ごとに呼ぶので、テンポが変わる)")
-    if data[0x7A] & 1 and not data[0x7A] & 2:
-        print("  (PAL 用の NSF。日本のファミコンでは少し速く鳴る)")
+    if data[0x7B] & ~1:
+        print(f"  ! 拡張音源 {', '.join(exp)} は未対応"); ok = False
+    elif exp: print("  VRC6: RP2350 synthesis (hardware validation pending)")
+    if data[0x7B] & 0x80: ok=False
+    print(f"  PLAY period {speed or 16639}us (NTSC M2 cycle timer)")
+    if (data[0x7A] & 3) == 1 or data[0x7A] & 0xFC:
+        print("  ! unsupported PAL-only / region flags"); ok = False
+    if not any(banks) and dlen > 0x10000-load:
+        print("  ! program exceeds CPU address space"); ok = False
     return ok
 
 

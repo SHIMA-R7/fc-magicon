@@ -44,7 +44,15 @@ class COMMTIMEOUTS(ctypes.Structure):
 
 class Port:
     def __init__(self, name):
+        kernel32.CreateFileW.argtypes = [wt.LPCWSTR, wt.DWORD, wt.DWORD, ctypes.c_void_p, wt.DWORD, wt.DWORD, wt.HANDLE]
         kernel32.CreateFileW.restype = wt.HANDLE
+        kernel32.ReadFile.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(wt.DWORD), ctypes.c_void_p]
+        kernel32.ReadFile.restype = wt.BOOL
+        kernel32.WriteFile.argtypes = kernel32.ReadFile.argtypes
+        kernel32.WriteFile.restype = wt.BOOL
+        kernel32.SetupComm.argtypes = [wt.HANDLE, wt.DWORD, wt.DWORD]
+        kernel32.SetCommTimeouts.argtypes = [wt.HANDLE, ctypes.POINTER(COMMTIMEOUTS)]
+        kernel32.EscapeCommFunction.argtypes = [wt.HANDLE, wt.DWORD]
         self.h = kernel32.CreateFileW("\\\\.\\" + name, 0xC0000000, 0, None, 3, 0, None)   # 読み書き、OPEN_EXISTING
         if self.h in (None, wt.HANDLE(-1).value):
             raise OSError(f"{name} を開けない(ほかのアプリが使っている?)")
@@ -56,7 +64,8 @@ class Port:
     def read(self, n=4096):
         buf = ctypes.create_string_buffer(n)
         got = wt.DWORD()
-        kernel32.ReadFile(self.h, buf, n, ctypes.byref(got), None)
+        if not kernel32.ReadFile(self.h, buf, n, ctypes.byref(got), None):
+            raise ctypes.WinError(ctypes.get_last_error())
         return buf.raw[:got.value]
 
     def write(self, data):

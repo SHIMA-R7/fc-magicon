@@ -20,6 +20,8 @@ source=source.replace('wr_abs++;','wr_abs++;sim_puts++;')
 source=source.replace('wr_abs = rd_abs + LATENCY;','sim_resets++;wr_abs = rd_abs + LATENCY;')
 source=source.replace('void audio_poll(void)','__declspec(dllexport) void audio_poll(void)')
 source=source.replace('void audio_push(uint8_t','__declspec(dllexport) void audio_push(uint8_t')
+source=source.replace('unsigned audio_local_space(void)', '__declspec(dllexport) unsigned audio_local_space(void)')
+source=source.replace('void audio_local_write(const int16_t', '__declspec(dllexport) void audio_local_write(const int16_t')
 source+='''
 __declspec(dllexport) uint64_t host_puts(void){return sim_puts;}
 __declspec(dllexport) uint64_t host_resets(void){return sim_resets;}

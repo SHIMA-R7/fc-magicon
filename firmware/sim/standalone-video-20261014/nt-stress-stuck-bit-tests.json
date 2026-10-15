@@ -1,0 +1,10 @@
+{
+  "mode": "stuck-bit",
+  "rounds": 52,
+  "written_bytes": 106496,
+  "read_bytes": 213200,
+  "total_errors": 106496,
+  "steps": 13507200,
+  "cpu_cycles": 38713011,
+  "hardware_verified": false
+}

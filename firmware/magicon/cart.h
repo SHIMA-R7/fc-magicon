@@ -33,6 +33,8 @@ typedef struct { char name[48]; uint32_t offset, len, sum, reserved; } lib_entry
 void cart_load_menu(const lib_entry_t *entries, int count, cart_info_t *info);
 // メニューで選ばれた番号(まだなら -1)。本体側が $5FF0 に書く
 int cart_menu_choice(void);
+unsigned cart_nsf_audio(int16_t *out,unsigned count);
+uint32_t cart_nsf_audio_fault(void);
 // ROM が無い時の試験画面(chr_test と同じ: 4色の縦縞 + 8ドットごとの格子、音)
 void cart_load_fallback(cart_info_t *info);
 // PIO を設定し、コア1でバスの応答を始める(本体の 5V を確かめてから呼ぶ)

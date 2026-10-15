@@ -15,3 +15,6 @@ int audio_payload_len(uint8_t fmt, uint16_t n);
 void audio_push(uint8_t fmt, uint16_t n, const uint8_t *payload);
 // 鳴らし終えた所を無音で埋める(途切れた時に古い音を鳴らさないため)。ときどき呼ぶ(256ms 以内ごと)
 void audio_poll(void);
+// Local synthesis: 2ms startup lead, at most 4ms buffered, no network latency policy.
+unsigned audio_local_space(void);
+void audio_local_write(const int16_t *samples,unsigned n);

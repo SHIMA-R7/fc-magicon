@@ -1,0 +1,10 @@
+{
+  "mode": "cpu-fault",
+  "rounds": 52,
+  "written_bytes": 106496,
+  "read_bytes": 213200,
+  "total_errors": 212992,
+  "steps": 23631600,
+  "cpu_cycles": 66534415,
+  "hardware_verified": false
+}

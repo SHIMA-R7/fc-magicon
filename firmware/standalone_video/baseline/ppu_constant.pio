@@ -1,0 +1,50 @@
+; Diagnostic only: fast A3 plane check. Low plane F0, high plane 0F.
+; IN_BASE=GPIO26, /RD=pin14, JMP_PIN=GPIO40 (/RD).
+.program ppu_constant
+.wrap_target
+start:
+    wait 1 pin 14
+    mov x, pins
+sample:
+    mov y, x               ; older sample, taken before the last /RD-high check
+    mov x, pins
+    jmp pin sample
+    mov osr, y
+    out null, 16
+    out x, 1               ; A13 from the SAME pre-read sample
+    jmp !x pattern
+    jmp start              ; nametable: start waits for /RD high, bus stays input
+pattern:
+    mov osr, y
+    out null, 3
+    out x, 1               ; A3 selects low/high pattern bitplane
+    set y, 15
+    jmp !x even_row
+    mov isr, y             ; odd row: 0F
+    jmp emit
+even_row:
+    mov isr, y
+    in null, 4             ; even row: F0; same path length as odd row
+emit:
+    mov osr, isr
+    jmp pin start          ; expired read: never enable output
+    out pins, 8
+    mov osr, ~null
+    out pindirs, 8
+    wait 1 pin 14
+    mov osr, null
+    out pindirs, 8
+.wrap
+% c-sdk {
+static inline void ppu_constant_program_init(PIO pio,uint sm,uint offset) {
+    pio_sm_config c=ppu_constant_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,26);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_out_pins(&c,26,8);
+    sm_config_set_out_shift(&c,true,false,32);
+    sm_config_set_in_shift(&c,false,false,32);
+    for (uint i=26;i<34;i++) pio_gpio_init(pio,i);
+    pio_sm_set_consecutive_pindirs(pio,sm,26,8,false);
+    pio_sm_init(pio,sm,offset,&c);
+}
+%}

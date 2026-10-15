@@ -1,0 +1,22 @@
+; Passive raw A12 low/high duration pairs. Two-instruction counting loops.
+; Eight ns/count at 250MHz, with uncalibrated edge/setup overhead.
+.program a12_probe
+.wrap_target
+    wait 0 pin 0
+low_start:
+    mov y, ~null
+low_loop:
+    jmp pin high_start
+    jmp y-- low_loop
+high_start:
+    mov isr, ~y
+    push block
+    mov x, ~null
+high_loop:
+    jmp pin high_count
+    mov isr, ~x
+    push block
+    jmp low_start
+high_count:
+    jmp x-- high_loop
+.wrap

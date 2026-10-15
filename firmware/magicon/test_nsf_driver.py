@@ -44,6 +44,10 @@ class Cart:
         m.subscribe_to_write(range(0x0000, 0x10000), self.write)
         self.cpu = MPU(memory=m)
         self.cpu.pc = self.read(0xFFFC) | self.read(0xFFFD) << 8
+        self.timer_active = False
+        self.timer_next = 0
+        self.timer_period = (int.from_bytes(nsf[0x6e:0x70], 'little') or 16639) * 1789773 / 1000000
+        self.ppu_writes=[]
 
     def load_nsf(self, p):
         self.songs, self.start = p[6], p[7]
@@ -91,6 +95,12 @@ class Cart:
         if a < 0x5000:
             return 0
         if a < 0x6000:
+            if a == 0x5F02:
+                if self.timer_active and self.cpu.processorCycles >= self.timer_next:
+                    while self.timer_next <= self.cpu.processorCycles:
+                        self.timer_next += self.timer_period
+                    return 1
+                return 0
             return self.drv[a & 0xFFF]
         if a < 0x8000:
             return self.wram[a & 0x1FFF]
@@ -104,6 +114,7 @@ class Cart:
         elif a < 0x4000:
             if a & 7 == 0:
                 self.ppu_ctrl = v
+            if a & 7 == 7: self.ppu_writes.append(v)
         elif a == 0x4016:
             if v & 1:
                 self.pad_shift = self.pad
@@ -112,6 +123,10 @@ class Cart:
         elif a < 0x5000:
             pass
         elif a < 0x6000:
+            if a == 0x5F03:
+                self.timer_active=bool(v)
+                self.timer_next=self.cpu.processorCycles+self.timer_period
+                return
             if a >= 0x5FF8:
                 self.bank_log.append((a, v))
                 if self.banked:
@@ -194,8 +209,9 @@ c.frames(1, START); c.frames(1)
 p0 = c.ram[0x302]; c.frames(20)
 check("START で一時停止(PLAY が止まる)", c.ram[0x302] == p0, f"{p0} -> {c.ram[0x302]}")
 check("一時停止で $4015 = 0", c.apu.get(0x4015) == 0)
+c.ram[0x302]=200; p0=200  # distinguish restart from continued playback unambiguously
 c.frames(1, START); c.frames(10)
-check("もう一度 START で再開", c.ram[0x302] > p0 and c.apu.get(0x4015) == 0x0F, f"{p0} -> {c.ram[0x302]}")
+check("もう一度 START は安全に曲の先頭から再生", c.ram[0x302] < p0 and c.apu.get(0x4015) == 0x0F, f"{p0} -> {c.ram[0x302]}")
 c.ram[0x302] = 0; c.frames(1, A); c.frames(5)
 check("A で最初から(曲は同じ)", c.ram[0x300] == 4 and c.ram[0x302] < 8, f"A={c.ram[0x300]} play={c.ram[0x302]}")
 
@@ -225,6 +241,24 @@ w8 = [v for a_, v in c.bank_log if a_ == 0x5FF8]
 check("やり直すとバンクを初期値に戻してから INIT($5FF8 に 0 → 2)", w8 == [0, 2], f"$5FF8 への書き込み {w8}")
 check("$5FF9-$5FFF にも初期値 1〜7", [v for a_, v in c.bank_log if a_ > 0x5FF8] == [1, 2, 3, 4, 5, 6, 7])
 
+for period in (8333, 16639, 19997, 33333):
+    p=bytearray(make_nsf(1,1,plain_code)); p[0x6e:0x70]=period.to_bytes(2,'little')
+    c=Cart(bytes(p)); c.frames(10); before=c.ram[0x302]; c.frames(60)
+    calls=(c.ram[0x302]-before)&255
+    expected=60*29780/(period*1789773/1000000)
+    check(f"PLAY period {period}us", abs(calls-expected)<=2, f"{calls} vs {expected:.2f}")
+c=Cart(make_nsf(255,255,plain_code)); c.frames(10); c.frames(1,RIGHT); c.frames(5)
+check("255曲目の次は1曲目",c.ram[0x300]==0)
+c.frames(1,LEFT); c.frames(5); check("1曲目の前は255曲目",c.ram[0x300]==254)
+check("3桁表示255",bytes(c.ppu_writes).find(b"255")>=0)
+def nonreturn_code(a):
+    a.label('init');a.sta(0x0300);a.rts()
+    a.label('play');a.inc_abs(0x0302);a.jmp('play')
+c=Cart(make_nsf(2,1,nonreturn_code));c.frames(10)
+c.frames(1,START);c.frames(2);stopped=c.ram[0x302];c.frames(10)
+check('non-returning PLAY can be stopped',c.ram[0x302]==stopped)
+c.frames(1,RIGHT);c.frames(5)
+check('non-returning PLAY can change tracks',c.ram[0x300]==1)
 print("全部 OK" if ok else "NG あり")
 sys.exit(0 if ok else 1)
 

@@ -13,6 +13,19 @@ project(fc_magicon C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
 
+if(FC_STANDALONE_VIDEO_ONLY)
+    add_subdirectory(standalone_video)
+    return()
+endif()
+
+# Optional early-response bootstrap experiment; normal firmware stays unchanged.
+if(FC_FASTBOOT OR FC_FASTBOOT_ONLY)
+    add_subdirectory(fastboot)
+    if(FC_FASTBOOT_ONLY)
+        return()
+    endif()
+endif()
+
 # USB ホストを使うもの(host_test、magicon_wifi)は TinyUSB 0.21 が要る(0.18 の RP2350 ホストはバルク転送が 64KB/秒止まり)。
 # build.ps1 が PICO_TINYUSB_PATH を 0.21 にして -DFC_TUSB021=ON で別にビルドする。ほかは pico-sdk 付属の 0.18 のまま。
 if (FC_TUSB021)

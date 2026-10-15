@@ -1,0 +1,24 @@
+; Passive /RD low width measurement. Resolution 2 instructions = 8ns at 250MHz.
+; First samples remain in FIFO; 0xffffffff means >= approximately 256ns.
+.program rd_width
+.wrap_target
+    wait 0 pin 0
+    set x, 31
+count:
+    jmp pin done
+    jmp x-- count
+done:
+    mov isr, x
+    push noblock
+    wait 1 pin 0
+.wrap
+% c-sdk {
+static inline void rd_width_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c=rd_width_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,40);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_fifo_join(&c,PIO_FIFO_JOIN_RX);
+    pio_sm_init(pio,sm,offset,&c);
+    pio_sm_set_enabled(pio,sm,true);
+}
+%}

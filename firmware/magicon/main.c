@@ -317,6 +317,21 @@ int main(void) {
         audio_init(PIN_AUDIO);          // PC の音(無音から鳴らし始める)
         remote_loop();                  // 戻らない
     }
+    if(!err && info.is_nsf && info.nsf_exp==1) {
+        audio_init(PIN_AUDIO);
+        int16_t samples[64];
+        bool reported_fault=false;
+        for(;;) {
+            unsigned n=audio_local_space();if(n>64)n=64;
+            n=cart_nsf_audio(samples,n);
+            if(n)audio_local_write(samples,n);
+            usb_poll();
+            if(!reported_fault && cart_nsf_audio_fault()) {
+                puts("NSF VRC6 queue overflow: expansion output muted; reboot required");reported_fault=true;
+            }
+            if(!n)sleep_us(100);
+        }
+    }
 
     uint32_t lc = 0, lp = 0, lw = 0;
     for (;;) {

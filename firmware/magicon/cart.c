@@ -81,6 +81,8 @@ static void diag_dma_chr_init(const uint8_t *source) {
 #include "remote_driver.h"
 #endif
 #include "nsf_driver.h"                 // NSF プレイヤーのドライバー($5000-)・画面の土台・CHR(gen_nsf_driver.py)
+#include "nsf_clock.h"
+#include "nsf_expansion.h"
 #include "menu_driver.h"                // ゲーム選択メニューの 6502 プログラム・画面の土台(gen_menu_driver.py)
 
 #define PIN_IRQ     45                  // High で Q1 が /IRQ を Low にする
@@ -287,6 +289,7 @@ static void __not_in_flash_func(mmc3_write)(uint addr, uint d) {
 }
 
 #if FC_DIAG_MMC3_GAME
+#include "mmc3_trace.h"
 static volatile uint32_t m3_chr_request;
 static volatile uint32_t m3_last_write, m3_write_count;
 static uint32_t m3_prg_mask;
@@ -315,6 +318,7 @@ static inline __attribute__((always_inline)) void mmc3_fast_chr(uint reg) {
 }
 static void __attribute__((noinline)) __not_in_flash_func(mmc3_game_write)(uint addr,uint d) {
     m3_last_write=(addr<<8)|d;m3_write_count++;
+    M3_TRACE_CPU(1,(addr<<8)|d,((uint32_t)m3_sel<<24)|((uint32_t)m3_count<<16)|((uint32_t)m3_latch<<8)|m3_irq_en);
     switch(addr&0xe001) {
     case 0x8000: {
         uint changed=m3_sel^d;m3_sel=d;
@@ -349,6 +353,13 @@ static void __not_in_flash_func(mmc3_chr_background_loop)(void) {
     uint32_t seen=UINT32_MAX;
     add_repeating_timer_ms(1000,mmc3_report_tick,NULL,&m3_report_timer);
     for(;;) {
+#if FC_MMC3_TRACE
+        if(getchar_timeout_us(0)=='t')m3_trace_begin();
+        if(m3_trace_pending && (int32_t)(time_us_32()-m3_trace_end)>=0) {
+            if(atomic_exchange_explicit(&m3_trace_active,0,memory_order_acq_rel))sleep_us(10);
+            m3_trace_dump();
+        }
+#endif
         if(m3_report_due) {
             m3_report_due=false;
             printf("MMC3: cpu=%lu wr=%lu last_header=%08lx mapper_writes=%lu last_write=%06lx select=%02x chr_request=%lu IRQcount=%u latch=%u enable=%u IRQpin=%u lateACK=%lu pcCPU=%u pcPPU=%u R6=%u R7=%u\n",
@@ -372,6 +383,7 @@ static void __not_in_flash_func(mmc3_chr_background_loop)(void) {
             __dmb();
             const uint8_t *source=*(const uint8_t *volatile *)&chr_map[slot];
             if(source!=cached[slot]) {
+                M3_TRACE_0(true,3,(slot<<24)|((uint32_t)(source-chr)&0xffffff),requested);
                 uint32_t begun=m33_hw->dwt_cyccnt;
                 // All CHR bank bases are 1 KiB aligned. Expand four bytes per
                 // load to reduce source reads and loop overhead on shared SRAM.
@@ -388,6 +400,7 @@ static void __not_in_flash_func(mmc3_chr_background_loop)(void) {
                 uint32_t elapsed=m33_hw->dwt_cyccnt-begun;
                 if(elapsed>m3_chr_copy_max)m3_chr_copy_max=elapsed;
                 m3_chr_copies++;
+                M3_TRACE_0(true,4,(slot<<24)|(elapsed&0xffffff),requested);
             }
         }
         seen=requested;
@@ -431,10 +444,13 @@ static void __not_in_flash_func(mmc3_a12_core0_irq)(void) {
         previous=now;
         m3_a12_events++;
         bool was_asserted=gpio_get(PIN_IRQ);
+        uint8_t before=m3_count;
         mmc3_clock();
         __dmb();
         if(!m3_irq_en)gpio_put(PIN_IRQ,0); // respect a simultaneous CPU-side disable
         if(!was_asserted && gpio_get(PIN_IRQ))m3_irq_assertions++;
+        if(before<=2 || !was_asserted && gpio_get(PIN_IRQ))
+            M3_TRACE_0(false,2,((uint32_t)before<<24)|((uint32_t)m3_count<<16)|((uint32_t)m3_latch<<8)|gpio_get(PIN_IRQ),m3_a12_events);
     }
 }
 static void mmc3_irq_core0_init(void) {
@@ -591,6 +607,9 @@ static inline __attribute__((always_inline)) void diag_nrom_bookkeeping(uint32_t
             wram[wr_addr&0x1fff]=(uint8_t)v;
 #if FC_DIAG_MMC3_GAME
         else if(wr_addr>=0x8000)mmc3_game_write(wr_addr,(uint8_t)v);
+        else if(wr_addr>=0x2000 && wr_addr<0x4000 &&
+            ((wr_addr&7)==0 || (wr_addr&7)==1 || (wr_addr&7)==5 || (wr_addr&7)==6))
+            M3_TRACE_CPU(5,(wr_addr<<8)|(v&255),stat_cpu);
 #endif
 #else
         if (wr_addr == 0x8000) {
@@ -687,16 +706,33 @@ static uint8_t *nsf_prg[8];
 static uint32_t nsf_nb;                 // 4KB バンクの数
 static uint8_t nsf_vec[6];
 static uint8_t drv[0x1000];
+static nsf_clock_t nsf_clock;
+static nsf_expansion_t nsf_expansion;
+static bool nsf_has_vrc6;
+static _Atomic uint32_t nsf_completed_cycle;
+static uint8_t nsf_empty_bank[4096]; // SRAM: do not introduce XIP latency into CPU replies
+static uint8_t *nsf_bank(uint d) {
+    return d < nsf_nb ? rom + d * 4096 : (uint8_t *)nsf_empty_bank;
+}
 
 static void __not_in_flash_func(nsf_write)(uint addr, uint d) {
     stat_wr++;
+    if (addr == 0x5F03) {
+        nsf_clock_start(&nsf_clock, d != 0);
+        if(!d && nsf_has_vrc6)nsf_expansion_write(&nsf_expansion,stat_cpu,255,0);
+        return;
+    }
+    if(nsf_has_vrc6) {
+        int reg=vrc6_register(addr);
+        if(reg>=0){nsf_expansion_write(&nsf_expansion,stat_cpu,(uint8_t)reg,(uint8_t)d);return;}
+    }
     if (addr >= 0x8000)
         return;                         // ROM(拡張音源のレジスタは、ここで横取りして合成する予定)
     if (addr >= 0x6000) {
         wram[addr & 0x1FFF] = d;
     } else if (addr >= 0x5FF8) {
         if (nsf_banked)
-            nsf_prg[addr - 0x5FF8] = rom + (d % nsf_nb) * 0x1000;
+            nsf_prg[addr - 0x5FF8] = nsf_bank(d);
     } else if (addr >= 0x5000) {
         drv[addr & 0xFFF] = d;
     }
@@ -709,6 +745,9 @@ static inline __attribute__((always_inline)) uint32_t nsf_cpu_access(uint32_t v)
         return NO_REPLY;
     }
     stat_cpu++;
+    nsf_clock_tick(&nsf_clock); // exactly once per M2 header, never the write-data sample
+    if(nsf_has_vrc6 && !(stat_cpu&63))
+        atomic_store_explicit(&nsf_completed_cycle,stat_cpu-1,memory_order_release);
     uint a = (v >> 8) & 0x7FFF;
     if (!(v & B_RW)) {                                        // 書き込みは全部2回目を受け取る
         wr_pending = true;
@@ -717,6 +756,7 @@ static inline __attribute__((always_inline)) uint32_t nsf_cpu_access(uint32_t v)
     }
     if (!(v & B_ROMSEL))                                      // $8000-$FFFF(ベクターはドライバーの番地)
         return 0xFF00u | (a >= 0x7FFA ? nsf_vec[a - 0x7FFA] : nsf_prg[a >> 12][a & 0xFFF]);
+    if (a == 0x5F02) return 0xFF00u | nsf_clock_take(&nsf_clock);
     if ((a & 0x6000) == 0x6000)                               // $6000-$7FFF
         return 0xFF00u | wram[a & 0x1FFF];
     if ((a & 0x7000) == 0x5000)                               // $5000-$5FFF ドライバー
@@ -730,13 +770,13 @@ static void __not_in_flash_func(nsf_bus_loop)(void) {
     io_ro_32 *cpu_rx = &pio0->rxf[0], *ppu_rx = &pio1->rxf[0];
     io_wo_32 *cpu_tx = &pio0->txf[0], *ppu_tx = &pio1->txf[0];
     for (;;) {
-        if (!pio_sm_is_rx_fifo_empty(pio1, 0))                // PPU: フォントとロゴ(is_mmc3 = false)
-            *ppu_tx = 0x80000000u | ppu_access(*ppu_rx);
         if (!pio_sm_is_rx_fifo_empty(pio0, 0)) {
             uint32_t r = nsf_cpu_access(*cpu_rx);
             if (r != NO_REPLY)
                 *cpu_tx = r | 0x80000000u | (wr_pending ? 0x10000u : 0);
         }
+        if (!pio_sm_is_rx_fifo_empty(pio1, 0))
+            *ppu_tx = 0x80000000u | ppu_access(*ppu_rx);
     }
 }
 #endif
@@ -760,12 +800,23 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     if (len < 0x80)
         return "NSF header is too short";
     memset(info, 0, sizeof *info);
+    if (p[5] != 1 && p[5] != 2) return "unsupported NSF version";
+    if (p[5] == 2 && p[0x7C]) return "NSF2 execution flags are not supported";
+    if (!p[6]) return "NSF has zero songs";
+    if ((p[0x7A] & 3) == 1) return "PAL-only NSF is not supported on NTSC FC";
+    if (p[0x7A] & 0xFC) return "unsupported NSF region flags";
+    if (p[0x7B] & ~1u) return "only VRC6 expansion audio is supported";
     info->is_nsf = true;
     info->nsf_songs = p[6] ? p[6] : 1;
     info->nsf_start = (p[7] >= 1 && p[7] <= info->nsf_songs) ? p[7] : 1;
     info->nsf_load = p[8] | p[9] << 8;
     info->nsf_init = p[0x0A] | p[0x0B] << 8;
     info->nsf_play = p[0x0C] | p[0x0D] << 8;
+    if (info->nsf_init < 0x8000 || info->nsf_play < 0x8000 ||
+        info->nsf_init >= 0xFFFA || info->nsf_play >= 0xFFFA)
+        return "unsupported NSF INIT/PLAY address";
+    uint16_t period = p[0x6E] | p[0x6F] << 8;
+    nsf_clock_init(&nsf_clock, period ? period : 16639);
     info->nsf_exp = p[0x7B];
     nsf_str(info->nsf_title, p + 0x0E);
     nsf_str(info->nsf_artist, p + 0x2E);
@@ -776,11 +827,13 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     uint32_t dlen = len - 0x80;
     if (!dlen) return "NSF has no program data";
     uint32_t prog = p[0x7D] | p[0x7E] << 8 | p[0x7F] << 16;   // NSF2: 後ろにメタデータがある時の長さ
+    if (p[5] == 2 && prog > dlen) return "truncated NSF2 program";
     if (p[5] >= 2 && prog && prog < dlen)
         dlen = prog;
     const uint8_t *data = p + 0x80;
 
     if (info->nsf_banked) {
+        if (info->nsf_load < 0x8000) return "NSF load address below $8000 is not supported";
         uint32_t pad = info->nsf_load & 0xFFF;
         nsf_nb = (pad + dlen + 0xFFF) / 0x1000;
         if (nsf_nb * 0x1000 > sizeof rom)
@@ -788,12 +841,13 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
         memset(rom, 0, nsf_nb * 0x1000);
         memcpy(rom + pad, data, dlen);
         for (int i = 0; i < 8; i++)
-            nsf_prg[i] = rom + (banks[i] % nsf_nb) * 0x1000;
+            nsf_prg[i] = nsf_bank(banks[i]);
         info->prg_size = nsf_nb * 0x1000;
     } else {
         if (info->nsf_load < 0x8000)
             return "NSF load address below $8000 is not supported";
         uint32_t n = 0x10000 - info->nsf_load;
+        if (dlen > n) return "NSF program exceeds address space";
         memset(rom, 0, 0x8000);
         memcpy(rom + (info->nsf_load - 0x8000), data, dlen < n ? dlen : n);
         nsf_nb = 8;
@@ -829,6 +883,9 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     chr8(0);
     memset(wram, 0, sizeof wram);
     is_nsf = true;
+    nsf_has_vrc6 = p[0x7B] == 1;
+    nsf_expansion_init(&nsf_expansion);nsf_expansion.cycle=stat_cpu;
+    atomic_store(&nsf_completed_cycle,stat_cpu);
     is_remote = false;
     is_menu = false;
     nsf_banked = info->nsf_banked;      // $5FF8-$5FFF の書き込みを効かせるか(PC の試験台で見つけた抜け)
@@ -838,6 +895,12 @@ static const char *nsf_load(const uint8_t *p, uint32_t len, cart_info_t *info) {
     set_mirror(MIR_V);
     return NULL;
 }
+
+unsigned cart_nsf_audio(int16_t *out,unsigned count) {
+    return nsf_has_vrc6 ? nsf_expansion_render(&nsf_expansion,
+        atomic_load_explicit(&nsf_completed_cycle,memory_order_acquire),out,count) : 0;
+}
+uint32_t cart_nsf_audio_fault(void) { return atomic_load(&nsf_expansion.fault); }
 
 // ---- 画面転送(リモートデスクトップ) ----
 // PC から来た 256 x 240 ドット(2 ビット)の絵を、PPU のパターンの読み出しに直接返す(gen_remote_driver.py の説明を参照)。

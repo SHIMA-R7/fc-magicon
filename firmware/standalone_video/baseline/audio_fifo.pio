@@ -1,0 +1,19 @@
+; One 8-bit sample per 12 PWM periods. 517 cycles per PWM period,
+; 6206 cycles per sample including pull/out. Fixed duration for every value.
+.program audio_fifo
+    pull block
+    mov isr, osr
+.wrap_target
+    pull block
+    out x, 8
+cycle:
+    mov y, isr
+    set pins, 0
+count:
+    jmp x!=y skip
+    set pins, 1
+skip:
+    jmp y-- count
+    out null, 2
+    jmp !osre cycle
+.wrap

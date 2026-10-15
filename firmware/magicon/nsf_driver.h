@@ -6,10 +6,10 @@
 #define NSFD_NT              0x0800
 #define NSFD_PARAM           0x0F00
 #define NSFD_RESET           0x5000
-#define NSFD_NMI             0x519A
-#define NSFD_IRQ             0x5288
-#define NSFD_INIT_OPERAND    0x028A
-#define NSFD_PLAY_OPERAND    0x028D
+#define NSFD_NMI             0x51C4
+#define NSFD_IRQ             0x52C2
+#define NSFD_INIT_OPERAND    0x02C4
+#define NSFD_PLAY_OPERAND    0x02C7
 #define NSFD_ROW_TITLE       0x0009
 #define NSFD_ROW_ARTIST      0x000B
 #define NSFD_ROW_COPY        0x000D
@@ -35,7 +35,7 @@
 //   $5021: 8D 06 20                 STA $2006
 //   $5024: A2 00                    LDX #$00
 // pal:
-//   $5026: BD 8F 52                 LDA paltab,X
+//   $5026: BD C9 52                 LDA paltab,X
 //   $5029: 8D 07 20                 STA $2007
 //   $502C: E8                       INX
 //   $502D: E0 20                    CPX #$20
@@ -72,307 +72,340 @@
 //   $506A: 8D 80 5F                 STA $5F80
 // start_song:
 //   $506D: A9 00                    LDA #$00
-//   $506F: 8D 00 20                 STA $2000
-//   $5072: 8D 01 20                 STA $2001
-//   $5075: 8D 81 5F                 STA $5F81
-//   $5078: 8D 86 5F                 STA $5F86
-//   $507B: 8D 87 5F                 STA $5F87
-//   $507E: 8D 85 5F                 STA $5F85
-//   $5081: A2 00                    LDX #$00
+//   $506F: 8D 03 5F                 STA $5F03
+//   $5072: A9 00                    LDA #$00
+//   $5074: 8D 00 20                 STA $2000
+//   $5077: 8D 01 20                 STA $2001
+//   $507A: 8D 81 5F                 STA $5F81
+//   $507D: 8D 86 5F                 STA $5F86
+//   $5080: 8D 87 5F                 STA $5F87
+//   $5083: 8D 85 5F                 STA $5F85
+//   $5086: A2 00                    LDX #$00
 // apu:
-//   $5083: 9D 00 40                 STA $4000,X
-//   $5086: E8                       INX
-//   $5087: E0 14                    CPX #$14
-//   $5089: D0 F8                    BNE apu
-//   $508B: 8D 15 40                 STA $4015
-//   $508E: A9 0F                    LDA #$0F
+//   $5088: 9D 00 40                 STA $4000,X
+//   $508B: E8                       INX
+//   $508C: E0 14                    CPX #$14
+//   $508E: D0 F8                    BNE apu
 //   $5090: 8D 15 40                 STA $4015
-//   $5093: A9 40                    LDA #$40
-//   $5095: 8D 17 40                 STA $4017
-//   $5098: A9 00                    LDA #$00
-//   $509A: AA                       TAX
+//   $5093: A9 0F                    LDA #$0F
+//   $5095: 8D 15 40                 STA $4015
+//   $5098: A9 40                    LDA #$40
+//   $509A: 8D 17 40                 STA $4017
+//   $509D: A9 00                    LDA #$00
+//   $509F: AA                       TAX
 // ram:
-//   $509B: 9D 00 00                 STA $0000,X
-//   $509E: 9D 00 01                 STA $0100,X
-//   $50A1: 9D 00 02                 STA $0200,X
-//   $50A4: 9D 00 03                 STA $0300,X
-//   $50A7: 9D 00 04                 STA $0400,X
-//   $50AA: 9D 00 05                 STA $0500,X
-//   $50AD: 9D 00 06                 STA $0600,X
-//   $50B0: 9D 00 07                 STA $0700,X
-//   $50B3: E8                       INX
-//   $50B4: D0 E5                    BNE ram
+//   $50A0: 9D 00 00                 STA $0000,X
+//   $50A3: 9D 00 01                 STA $0100,X
+//   $50A6: 9D 00 02                 STA $0200,X
+//   $50A9: 9D 00 03                 STA $0300,X
+//   $50AC: 9D 00 04                 STA $0400,X
+//   $50AF: 9D 00 05                 STA $0500,X
+//   $50B2: 9D 00 06                 STA $0600,X
+//   $50B5: 9D 00 07                 STA $0700,X
+//   $50B8: E8                       INX
+//   $50B9: D0 E5                    BNE ram
 // wram:
-//   $50B6: 9D 00 60                 STA $6000,X
-//   $50B9: 9D 00 61                 STA $6100,X
-//   $50BC: 9D 00 62                 STA $6200,X
-//   $50BF: 9D 00 63                 STA $6300,X
-//   $50C2: 9D 00 64                 STA $6400,X
-//   $50C5: 9D 00 65                 STA $6500,X
-//   $50C8: 9D 00 66                 STA $6600,X
-//   $50CB: 9D 00 67                 STA $6700,X
-//   $50CE: 9D 00 68                 STA $6800,X
-//   $50D1: 9D 00 69                 STA $6900,X
-//   $50D4: 9D 00 6A                 STA $6A00,X
-//   $50D7: 9D 00 6B                 STA $6B00,X
-//   $50DA: 9D 00 6C                 STA $6C00,X
-//   $50DD: 9D 00 6D                 STA $6D00,X
-//   $50E0: 9D 00 6E                 STA $6E00,X
-//   $50E3: 9D 00 6F                 STA $6F00,X
-//   $50E6: 9D 00 70                 STA $7000,X
-//   $50E9: 9D 00 71                 STA $7100,X
-//   $50EC: 9D 00 72                 STA $7200,X
-//   $50EF: 9D 00 73                 STA $7300,X
-//   $50F2: 9D 00 74                 STA $7400,X
-//   $50F5: 9D 00 75                 STA $7500,X
-//   $50F8: 9D 00 76                 STA $7600,X
-//   $50FB: 9D 00 77                 STA $7700,X
-//   $50FE: 9D 00 78                 STA $7800,X
-//   $5101: 9D 00 79                 STA $7900,X
-//   $5104: 9D 00 7A                 STA $7A00,X
-//   $5107: 9D 00 7B                 STA $7B00,X
-//   $510A: 9D 00 7C                 STA $7C00,X
-//   $510D: 9D 00 7D                 STA $7D00,X
-//   $5110: 9D 00 7E                 STA $7E00,X
-//   $5113: 9D 00 7F                 STA $7F00,X
-//   $5116: E8                       INX
-//   $5117: D0 9D                    BNE wram
-//   $5119: A2 FF                    LDX #$FF
-//   $511B: 9A                       TXS
-//   $511C: A2 00                    LDX #$00
+//   $50BB: 9D 00 60                 STA $6000,X
+//   $50BE: 9D 00 61                 STA $6100,X
+//   $50C1: 9D 00 62                 STA $6200,X
+//   $50C4: 9D 00 63                 STA $6300,X
+//   $50C7: 9D 00 64                 STA $6400,X
+//   $50CA: 9D 00 65                 STA $6500,X
+//   $50CD: 9D 00 66                 STA $6600,X
+//   $50D0: 9D 00 67                 STA $6700,X
+//   $50D3: 9D 00 68                 STA $6800,X
+//   $50D6: 9D 00 69                 STA $6900,X
+//   $50D9: 9D 00 6A                 STA $6A00,X
+//   $50DC: 9D 00 6B                 STA $6B00,X
+//   $50DF: 9D 00 6C                 STA $6C00,X
+//   $50E2: 9D 00 6D                 STA $6D00,X
+//   $50E5: 9D 00 6E                 STA $6E00,X
+//   $50E8: 9D 00 6F                 STA $6F00,X
+//   $50EB: 9D 00 70                 STA $7000,X
+//   $50EE: 9D 00 71                 STA $7100,X
+//   $50F1: 9D 00 72                 STA $7200,X
+//   $50F4: 9D 00 73                 STA $7300,X
+//   $50F7: 9D 00 74                 STA $7400,X
+//   $50FA: 9D 00 75                 STA $7500,X
+//   $50FD: 9D 00 76                 STA $7600,X
+//   $5100: 9D 00 77                 STA $7700,X
+//   $5103: 9D 00 78                 STA $7800,X
+//   $5106: 9D 00 79                 STA $7900,X
+//   $5109: 9D 00 7A                 STA $7A00,X
+//   $510C: 9D 00 7B                 STA $7B00,X
+//   $510F: 9D 00 7C                 STA $7C00,X
+//   $5112: 9D 00 7D                 STA $7D00,X
+//   $5115: 9D 00 7E                 STA $7E00,X
+//   $5118: 9D 00 7F                 STA $7F00,X
+//   $511B: E8                       INX
+//   $511C: D0 9D                    BNE wram
+//   $511E: A2 FF                    LDX #$FF
+//   $5120: 9A                       TXS
+//   $5121: A2 00                    LDX #$00
 // bank:
-//   $511E: BD 08 5F                 LDA $5F08,X
-//   $5121: 9D F8 5F                 STA $5FF8,X
-//   $5124: E8                       INX
-//   $5125: E0 08                    CPX #$08
-//   $5127: D0 F5                    BNE bank
-//   $5129: A9 22                    LDA #$22
-//   $512B: 8D 06 20                 STA $2006
-//   $512E: A9 2F                    LDA #$2F
+//   $5123: BD 08 5F                 LDA $5F08,X
+//   $5126: 9D F8 5F                 STA $5FF8,X
+//   $5129: E8                       INX
+//   $512A: E0 08                    CPX #$08
+//   $512C: D0 F5                    BNE bank
+//   $512E: A9 22                    LDA #$22
 //   $5130: 8D 06 20                 STA $2006
-//   $5133: AD 80 5F                 LDA $5F80
-//   $5136: 20 86 51                 JSR put2
-//   $5139: A9 22                    LDA #$22
-//   $513B: 8D 06 20                 STA $2006
-//   $513E: A9 34                    LDA #$34
+//   $5133: A9 2E                    LDA #$2E
+//   $5135: 8D 06 20                 STA $2006
+//   $5138: AD 80 5F                 LDA $5F80
+//   $513B: 20 A2 51                 JSR put2
+//   $513E: A9 22                    LDA #$22
 //   $5140: 8D 06 20                 STA $2006
-//   $5143: AD 00 5F                 LDA $5F00
-//   $5146: 20 86 51                 JSR put2
-//   $5149: A9 22                    LDA #$22
-//   $514B: 8D 06 20                 STA $2006
-//   $514E: A9 6D                    LDA #$6D
+//   $5143: A9 34                    LDA #$34
+//   $5145: 8D 06 20                 STA $2006
+//   $5148: AD 00 5F                 LDA $5F00
+//   $514B: 20 A2 51                 JSR put2
+//   $514E: A9 22                    LDA #$22
 //   $5150: 8D 06 20                 STA $2006
-//   $5153: A9 20                    LDA #$20
-//   $5155: A2 05                    LDX #$05
+//   $5153: A9 6D                    LDA #$6D
+//   $5155: 8D 06 20                 STA $2006
+//   $5158: A9 20                    LDA #$20
+//   $515A: A2 05                    LDX #$05
 // unpause:
-//   $5157: 8D 07 20                 STA $2007
-//   $515A: CA                       DEX
-//   $515B: D0 FA                    BNE unpause
-//   $515D: AE 80 5F                 LDX $5F80
-//   $5160: CA                       DEX
-//   $5161: 8A                       TXA
-//   $5162: A2 00                    LDX #$00
-//   $5164: 20 89 52                 JSR init_tramp
+//   $515C: 8D 07 20                 STA $2007
+//   $515F: CA                       DEX
+//   $5160: D0 FA                    BNE unpause
+//   $5162: AE 80 5F                 LDX $5F80
+//   $5165: CA                       DEX
+//   $5166: 8A                       TXA
+//   $5167: A2 00                    LDX #$00
+//   $5169: A0 00                    LDY #$00
+//   $516B: 20 C3 52                 JSR init_tramp
+//   $516E: A9 01                    LDA #$01
+//   $5170: 8D 03 5F                 STA $5F03
 // vbl3:
-//   $5167: 2C 02 20                 BIT $2002
-//   $516A: 10 FB                    BPL vbl3
-//   $516C: A9 00                    LDA #$00
-//   $516E: 8D 05 20                 STA $2005
-//   $5171: 8D 05 20                 STA $2005
-//   $5174: A9 80                    LDA #$80
-//   $5176: 8D 00 20                 STA $2000
-//   $5179: A9 0A                    LDA #$0A
-//   $517B: 8D 01 20                 STA $2001
+//   $5173: 2C 02 20                 BIT $2002
+//   $5176: 10 FB                    BPL vbl3
+//   $5178: A9 00                    LDA #$00
+//   $517A: 8D 05 20                 STA $2005
+//   $517D: 8D 05 20                 STA $2005
+//   $5180: A9 80                    LDA #$80
+//   $5182: 8D 00 20                 STA $2000
+//   $5185: A9 0A                    LDA #$0A
+//   $5187: 8D 01 20                 STA $2001
 // main:
-//   $517E: AD 81 5F                 LDA $5F81
-//   $5181: F0 FB                    BEQ main
-//   $5183: 4C 6D 50                 JMP start_song
+//   $518A: AD 81 5F                 LDA $5F81
+//   $518D: F0 03                    BEQ main_tick
+//   $518F: 4C 6D 50                 JMP start_song
+// main_tick:
+//   $5192: AD 86 5F                 LDA $5F86
+//   $5195: D0 F3                    BNE main
+//   $5197: AD 02 5F                 LDA $5F02
+//   $519A: F0 EE                    BEQ main
+//   $519C: 20 C6 52                 JSR play_tramp
+//   $519F: 4C 8A 51                 JMP main
 // put2:
-//   $5186: A2 30                    LDX #$30
+//   $51A2: A2 30                    LDX #$30
+// hundreds:
+//   $51A4: C9 64                    CMP #$64
+//   $51A6: 90 05                    BCC hundreds_done
+//   $51A8: E9 64                    SBC #$64
+//   $51AA: E8                       INX
+//   $51AB: D0 F7                    BNE hundreds
+// hundreds_done:
+//   $51AD: 8E 07 20                 STX $2007
+//   $51B0: A2 30                    LDX #$30
 // p2:
-//   $5188: C9 0A                    CMP #$0A
-//   $518A: 90 05                    BCC p2d
-//   $518C: E9 0A                    SBC #$0A
-//   $518E: E8                       INX
-//   $518F: D0 F7                    BNE p2
+//   $51B2: C9 0A                    CMP #$0A
+//   $51B4: 90 05                    BCC p2d
+//   $51B6: E9 0A                    SBC #$0A
+//   $51B8: E8                       INX
+//   $51B9: D0 F7                    BNE p2
 // p2d:
-//   $5191: 8E 07 20                 STX $2007
-//   $5194: 09 30                    ORA #$30
-//   $5196: 8D 07 20                 STA $2007
-//   $5199: 60                       RTS
+//   $51BB: 8E 07 20                 STX $2007
+//   $51BE: 09 30                    ORA #$30
+//   $51C0: 8D 07 20                 STA $2007
+//   $51C3: 60                       RTS
 // nmi:
-//   $519A: 48                       PHA
-//   $519B: 8A                       TXA
-//   $519C: 48                       PHA
-//   $519D: 98                       TYA
-//   $519E: 48                       PHA
-//   $519F: AD 85 5F                 LDA $5F85
-//   $51A2: F0 03                    BEQ nmi_go
-//   $51A4: 4C 82 52                 JMP nmi_out
+//   $51C4: 48                       PHA
+//   $51C5: 8A                       TXA
+//   $51C6: 48                       PHA
+//   $51C7: 98                       TYA
+//   $51C8: 48                       PHA
+//   $51C9: AD 85 5F                 LDA $5F85
+//   $51CC: F0 03                    BEQ nmi_go
+//   $51CE: 4C BC 52                 JMP nmi_out
 // nmi_go:
-//   $51A7: EE 85 5F                 INC $5F85
-//   $51AA: AD 87 5F                 LDA $5F87
-//   $51AD: F0 3E                    BEQ no_draw
-//   $51AF: A9 00                    LDA #$00
-//   $51B1: 8D 87 5F                 STA $5F87
-//   $51B4: AD 02 20                 LDA $2002
-//   $51B7: A9 22                    LDA #$22
-//   $51B9: 8D 06 20                 STA $2006
-//   $51BC: A9 6D                    LDA #$6D
-//   $51BE: 8D 06 20                 STA $2006
-//   $51C1: A2 00                    LDX #$00
-//   $51C3: AD 86 5F                 LDA $5F86
-//   $51C6: F0 0E                    BEQ dp_clr
-// dp_txt:
-//   $51C8: BD AF 52                 LDA pausetxt,X
-//   $51CB: 8D 07 20                 STA $2007
-//   $51CE: E8                       INX
-//   $51CF: E0 05                    CPX #$05
-//   $51D1: D0 F5                    BNE dp_txt
-//   $51D3: 4C E0 51                 JMP dp_end
-// dp_clr:
-//   $51D6: A9 20                    LDA #$20
-// dp_c:
-//   $51D8: 8D 07 20                 STA $2007
-//   $51DB: E8                       INX
-//   $51DC: E0 05                    CPX #$05
-//   $51DE: D0 F8                    BNE dp_c
-// dp_end:
-//   $51E0: A9 00                    LDA #$00
-//   $51E2: 8D 05 20                 STA $2005
-//   $51E5: 8D 05 20                 STA $2005
-//   $51E8: A9 80                    LDA #$80
-//   $51EA: 8D 00 20                 STA $2000
-// no_draw:
+//   $51D1: EE 85 5F                 INC $5F85
+//   $51D4: AD 87 5F                 LDA $5F87
+//   $51D7: F0 3E                    BEQ no_draw
+//   $51D9: A9 00                    LDA #$00
+//   $51DB: 8D 87 5F                 STA $5F87
+//   $51DE: AD 02 20                 LDA $2002
+//   $51E1: A9 22                    LDA #$22
+//   $51E3: 8D 06 20                 STA $2006
+//   $51E6: A9 6D                    LDA #$6D
+//   $51E8: 8D 06 20                 STA $2006
+//   $51EB: A2 00                    LDX #$00
 //   $51ED: AD 86 5F                 LDA $5F86
-//   $51F0: D0 03                    BNE no_play
-//   $51F2: 20 8C 52                 JSR play_tramp
+//   $51F0: F0 0E                    BEQ dp_clr
+// dp_txt:
+//   $51F2: BD E9 52                 LDA pausetxt,X
+//   $51F5: 8D 07 20                 STA $2007
+//   $51F8: E8                       INX
+//   $51F9: E0 05                    CPX #$05
+//   $51FB: D0 F5                    BNE dp_txt
+//   $51FD: 4C 0A 52                 JMP dp_end
+// dp_clr:
+//   $5200: A9 20                    LDA #$20
+// dp_c:
+//   $5202: 8D 07 20                 STA $2007
+//   $5205: E8                       INX
+//   $5206: E0 05                    CPX #$05
+//   $5208: D0 F8                    BNE dp_c
+// dp_end:
+//   $520A: A9 00                    LDA #$00
+//   $520C: 8D 05 20                 STA $2005
+//   $520F: 8D 05 20                 STA $2005
+//   $5212: A9 80                    LDA #$80
+//   $5214: 8D 00 20                 STA $2000
+// no_draw:
 // no_play:
-//   $51F5: A9 01                    LDA #$01
-//   $51F7: 8D 16 40                 STA $4016
-//   $51FA: A9 00                    LDA #$00
-//   $51FC: 8D 16 40                 STA $4016
-//   $51FF: A2 08                    LDX #$08
+//   $5217: A9 01                    LDA #$01
+//   $5219: 8D 16 40                 STA $4016
+//   $521C: A9 00                    LDA #$00
+//   $521E: 8D 16 40                 STA $4016
+//   $5221: A2 08                    LDX #$08
 // pad:
-//   $5201: AD 16 40                 LDA $4016
-//   $5204: 4A                       LSR_A
-//   $5205: 2E 82 5F                 ROL $5F82
-//   $5208: CA                       DEX
-//   $5209: D0 F6                    BNE pad
-//   $520B: AD 83 5F                 LDA $5F83
-//   $520E: 49 FF                    EOR #$FF
-//   $5210: 2D 82 5F                 AND $5F82
-//   $5213: 8D 84 5F                 STA $5F84
-//   $5216: AD 82 5F                 LDA $5F82
-//   $5219: 8D 83 5F                 STA $5F83
-//   $521C: AD 84 5F                 LDA $5F84
-//   $521F: 4A                       LSR_A
-//   $5220: 90 15                    BCC not_right
-//   $5222: EE 80 5F                 INC $5F80
-//   $5225: AD 80 5F                 LDA $5F80
-//   $5228: CD 00 5F                 CMP $5F00
-//   $522B: F0 24                    BEQ req
-//   $522D: 90 22                    BCC req
-//   $522F: A9 01                    LDA #$01
-//   $5231: 8D 80 5F                 STA $5F80
-//   $5234: 4C 51 52                 JMP req
+//   $5223: AD 16 40                 LDA $4016
+//   $5226: 4A                       LSR_A
+//   $5227: 2E 82 5F                 ROL $5F82
+//   $522A: CA                       DEX
+//   $522B: D0 F6                    BNE pad
+//   $522D: AD 83 5F                 LDA $5F83
+//   $5230: 49 FF                    EOR #$FF
+//   $5232: 2D 82 5F                 AND $5F82
+//   $5235: 8D 84 5F                 STA $5F84
+//   $5238: AD 82 5F                 LDA $5F82
+//   $523B: 8D 83 5F                 STA $5F83
+//   $523E: AD 84 5F                 LDA $5F84
+//   $5241: 4A                       LSR_A
+//   $5242: 90 17                    BCC not_right
+//   $5244: EE 80 5F                 INC $5F80
+//   $5247: AD 80 5F                 LDA $5F80
+//   $524A: F0 07                    BEQ wrap_right
+//   $524C: CD 00 5F                 CMP $5F00
+//   $524F: F0 24                    BEQ req
+//   $5251: 90 22                    BCC req
+// wrap_right:
+//   $5253: A9 01                    LDA #$01
+//   $5255: 8D 80 5F                 STA $5F80
+//   $5258: 4C 75 52                 JMP req
 // not_right:
-//   $5237: AD 84 5F                 LDA $5F84
-//   $523A: 29 02                    AND #$02
-//   $523C: F0 0E                    BEQ not_left
-//   $523E: CE 80 5F                 DEC $5F80
-//   $5241: D0 0E                    BNE req
-//   $5243: AD 00 5F                 LDA $5F00
-//   $5246: 8D 80 5F                 STA $5F80
-//   $5249: 4C 51 52                 JMP req
+//   $525B: AD 84 5F                 LDA $5F84
+//   $525E: 29 02                    AND #$02
+//   $5260: F0 0E                    BEQ not_left
+//   $5262: CE 80 5F                 DEC $5F80
+//   $5265: D0 0E                    BNE req
+//   $5267: AD 00 5F                 LDA $5F00
+//   $526A: 8D 80 5F                 STA $5F80
+//   $526D: 4C 75 52                 JMP req
 // not_left:
-//   $524C: AD 84 5F                 LDA $5F84
-//   $524F: 10 08                    BPL not_a
+//   $5270: AD 84 5F                 LDA $5F84
+//   $5273: 10 08                    BPL not_a
 // req:
-//   $5251: A9 01                    LDA #$01
-//   $5253: 8D 81 5F                 STA $5F81
-//   $5256: 4C 7F 52                 JMP nmi_done
+//   $5275: A9 01                    LDA #$01
+//   $5277: 8D 81 5F                 STA $5F81
+//   $527A: 4C A6 52                 JMP nmi_done
 // not_a:
-//   $5259: AD 84 5F                 LDA $5F84
-//   $525C: 29 10                    AND #$10
-//   $525E: F0 1F                    BEQ nmi_done
-//   $5260: AD 86 5F                 LDA $5F86
-//   $5263: 49 01                    EOR #$01
-//   $5265: 8D 86 5F                 STA $5F86
-//   $5268: A9 01                    LDA #$01
-//   $526A: 8D 87 5F                 STA $5F87
-//   $526D: AD 86 5F                 LDA $5F86
-//   $5270: F0 08                    BEQ resume
-//   $5272: A9 00                    LDA #$00
-//   $5274: 8D 15 40                 STA $4015
-//   $5277: 4C 7F 52                 JMP nmi_done
+//   $527D: AD 84 5F                 LDA $5F84
+//   $5280: 29 10                    AND #$10
+//   $5282: F0 22                    BEQ nmi_done
+//   $5284: AD 86 5F                 LDA $5F86
+//   $5287: 49 01                    EOR #$01
+//   $5289: 8D 86 5F                 STA $5F86
+//   $528C: A9 01                    LDA #$01
+//   $528E: 8D 87 5F                 STA $5F87
+//   $5291: AD 86 5F                 LDA $5F86
+//   $5294: F0 0B                    BEQ resume
+//   $5296: A9 00                    LDA #$00
+//   $5298: 8D 15 40                 STA $4015
+//   $529B: 8D 03 5F                 STA $5F03
+//   $529E: 4C A6 52                 JMP nmi_done
 // resume:
-//   $527A: A9 0F                    LDA #$0F
-//   $527C: 8D 15 40                 STA $4015
+//   $52A1: A9 01                    LDA #$01
+//   $52A3: 8D 81 5F                 STA $5F81
 // nmi_done:
-//   $527F: CE 85 5F                 DEC $5F85
+//   $52A6: CE 85 5F                 DEC $5F85
+//   $52A9: AD 81 5F                 LDA $5F81
+//   $52AC: F0 03                    BEQ nmi_no_restart
+//   $52AE: 4C 6D 50                 JMP start_song
+// nmi_no_restart:
+//   $52B1: AD 86 5F                 LDA $5F86
+//   $52B4: F0 06                    BEQ nmi_out
+//   $52B6: A2 FF                    LDX #$FF
+//   $52B8: 9A                       TXS
+//   $52B9: 4C 8A 51                 JMP main
 // nmi_out:
-//   $5282: 68                       PLA
-//   $5283: A8                       TAY
-//   $5284: 68                       PLA
-//   $5285: AA                       TAX
-//   $5286: 68                       PLA
-//   $5287: 40                       RTI
+//   $52BC: 68                       PLA
+//   $52BD: A8                       TAY
+//   $52BE: 68                       PLA
+//   $52BF: AA                       TAX
+//   $52C0: 68                       PLA
+//   $52C1: 40                       RTI
 // irq:
-//   $5288: 40                       RTI
+//   $52C2: 40                       RTI
 // init_tramp:
-//   $5289: 4C 00 00                 JMP $0000
+//   $52C3: 4C 00 00                 JMP $0000
 // play_tramp:
-//   $528C: 4C 00 00                 JMP $0000
+//   $52C6: 4C 00 00                 JMP $0000
 // paltab:
-//   $528F: 0F 30 11 21 0F 21 11 30  パレット(背景 0 = 白・青・水色、背景 1 = 水色の文字)
+//   $52C9: 0F 30 11 21 0F 21 11 30  パレット(背景 0 = 白・青・水色、背景 1 = 水色の文字)
 // pausetxt:
-//   $52AF: 50 41 55 53 45           "PAUSE"
-static const uint8_t nsfd_code[692] = {
+//   $52E9: 53 54 4F 50 20           "STOP"
+static const uint8_t nsfd_code[750] = {
     0x78, 0xD8, 0xA2, 0xFF, 0x9A, 0xA9, 0x00, 0x8D, 0x00, 0x20, 0x8D, 0x01, 0x20, 0x8D, 0x15, 0x40,
     0x2C, 0x02, 0x20, 0x10, 0xFB, 0x2C, 0x02, 0x20, 0x10, 0xFB, 0xA9, 0x3F, 0x8D, 0x06, 0x20, 0xA9,
-    0x00, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0x8F, 0x52, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x20, 0xD0,
+    0x00, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0xC9, 0x52, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x20, 0xD0,
     0xF5, 0xA9, 0x20, 0x8D, 0x06, 0x20, 0xA9, 0x00, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0x00, 0x58,
     0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xA2, 0x00, 0xBD, 0x00, 0x59, 0x8D, 0x07, 0x20, 0xE8, 0xD0,
     0xF7, 0xA2, 0x00, 0xBD, 0x00, 0x5A, 0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xA2, 0x00, 0xBD, 0x00,
     0x5B, 0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xAD, 0x01, 0x5F, 0x8D, 0x80, 0x5F, 0xA9, 0x00, 0x8D,
-    0x00, 0x20, 0x8D, 0x01, 0x20, 0x8D, 0x81, 0x5F, 0x8D, 0x86, 0x5F, 0x8D, 0x87, 0x5F, 0x8D, 0x85,
-    0x5F, 0xA2, 0x00, 0x9D, 0x00, 0x40, 0xE8, 0xE0, 0x14, 0xD0, 0xF8, 0x8D, 0x15, 0x40, 0xA9, 0x0F,
-    0x8D, 0x15, 0x40, 0xA9, 0x40, 0x8D, 0x17, 0x40, 0xA9, 0x00, 0xAA, 0x9D, 0x00, 0x00, 0x9D, 0x00,
-    0x01, 0x9D, 0x00, 0x02, 0x9D, 0x00, 0x03, 0x9D, 0x00, 0x04, 0x9D, 0x00, 0x05, 0x9D, 0x00, 0x06,
-    0x9D, 0x00, 0x07, 0xE8, 0xD0, 0xE5, 0x9D, 0x00, 0x60, 0x9D, 0x00, 0x61, 0x9D, 0x00, 0x62, 0x9D,
-    0x00, 0x63, 0x9D, 0x00, 0x64, 0x9D, 0x00, 0x65, 0x9D, 0x00, 0x66, 0x9D, 0x00, 0x67, 0x9D, 0x00,
-    0x68, 0x9D, 0x00, 0x69, 0x9D, 0x00, 0x6A, 0x9D, 0x00, 0x6B, 0x9D, 0x00, 0x6C, 0x9D, 0x00, 0x6D,
-    0x9D, 0x00, 0x6E, 0x9D, 0x00, 0x6F, 0x9D, 0x00, 0x70, 0x9D, 0x00, 0x71, 0x9D, 0x00, 0x72, 0x9D,
-    0x00, 0x73, 0x9D, 0x00, 0x74, 0x9D, 0x00, 0x75, 0x9D, 0x00, 0x76, 0x9D, 0x00, 0x77, 0x9D, 0x00,
-    0x78, 0x9D, 0x00, 0x79, 0x9D, 0x00, 0x7A, 0x9D, 0x00, 0x7B, 0x9D, 0x00, 0x7C, 0x9D, 0x00, 0x7D,
-    0x9D, 0x00, 0x7E, 0x9D, 0x00, 0x7F, 0xE8, 0xD0, 0x9D, 0xA2, 0xFF, 0x9A, 0xA2, 0x00, 0xBD, 0x08,
-    0x5F, 0x9D, 0xF8, 0x5F, 0xE8, 0xE0, 0x08, 0xD0, 0xF5, 0xA9, 0x22, 0x8D, 0x06, 0x20, 0xA9, 0x2F,
-    0x8D, 0x06, 0x20, 0xAD, 0x80, 0x5F, 0x20, 0x86, 0x51, 0xA9, 0x22, 0x8D, 0x06, 0x20, 0xA9, 0x34,
-    0x8D, 0x06, 0x20, 0xAD, 0x00, 0x5F, 0x20, 0x86, 0x51, 0xA9, 0x22, 0x8D, 0x06, 0x20, 0xA9, 0x6D,
-    0x8D, 0x06, 0x20, 0xA9, 0x20, 0xA2, 0x05, 0x8D, 0x07, 0x20, 0xCA, 0xD0, 0xFA, 0xAE, 0x80, 0x5F,
-    0xCA, 0x8A, 0xA2, 0x00, 0x20, 0x89, 0x52, 0x2C, 0x02, 0x20, 0x10, 0xFB, 0xA9, 0x00, 0x8D, 0x05,
-    0x20, 0x8D, 0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00, 0x20, 0xA9, 0x0A, 0x8D, 0x01, 0x20, 0xAD, 0x81,
-    0x5F, 0xF0, 0xFB, 0x4C, 0x6D, 0x50, 0xA2, 0x30, 0xC9, 0x0A, 0x90, 0x05, 0xE9, 0x0A, 0xE8, 0xD0,
-    0xF7, 0x8E, 0x07, 0x20, 0x09, 0x30, 0x8D, 0x07, 0x20, 0x60, 0x48, 0x8A, 0x48, 0x98, 0x48, 0xAD,
-    0x85, 0x5F, 0xF0, 0x03, 0x4C, 0x82, 0x52, 0xEE, 0x85, 0x5F, 0xAD, 0x87, 0x5F, 0xF0, 0x3E, 0xA9,
-    0x00, 0x8D, 0x87, 0x5F, 0xAD, 0x02, 0x20, 0xA9, 0x22, 0x8D, 0x06, 0x20, 0xA9, 0x6D, 0x8D, 0x06,
-    0x20, 0xA2, 0x00, 0xAD, 0x86, 0x5F, 0xF0, 0x0E, 0xBD, 0xAF, 0x52, 0x8D, 0x07, 0x20, 0xE8, 0xE0,
-    0x05, 0xD0, 0xF5, 0x4C, 0xE0, 0x51, 0xA9, 0x20, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x05, 0xD0, 0xF8,
-    0xA9, 0x00, 0x8D, 0x05, 0x20, 0x8D, 0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00, 0x20, 0xAD, 0x86, 0x5F,
-    0xD0, 0x03, 0x20, 0x8C, 0x52, 0xA9, 0x01, 0x8D, 0x16, 0x40, 0xA9, 0x00, 0x8D, 0x16, 0x40, 0xA2,
-    0x08, 0xAD, 0x16, 0x40, 0x4A, 0x2E, 0x82, 0x5F, 0xCA, 0xD0, 0xF6, 0xAD, 0x83, 0x5F, 0x49, 0xFF,
-    0x2D, 0x82, 0x5F, 0x8D, 0x84, 0x5F, 0xAD, 0x82, 0x5F, 0x8D, 0x83, 0x5F, 0xAD, 0x84, 0x5F, 0x4A,
-    0x90, 0x15, 0xEE, 0x80, 0x5F, 0xAD, 0x80, 0x5F, 0xCD, 0x00, 0x5F, 0xF0, 0x24, 0x90, 0x22, 0xA9,
-    0x01, 0x8D, 0x80, 0x5F, 0x4C, 0x51, 0x52, 0xAD, 0x84, 0x5F, 0x29, 0x02, 0xF0, 0x0E, 0xCE, 0x80,
-    0x5F, 0xD0, 0x0E, 0xAD, 0x00, 0x5F, 0x8D, 0x80, 0x5F, 0x4C, 0x51, 0x52, 0xAD, 0x84, 0x5F, 0x10,
-    0x08, 0xA9, 0x01, 0x8D, 0x81, 0x5F, 0x4C, 0x7F, 0x52, 0xAD, 0x84, 0x5F, 0x29, 0x10, 0xF0, 0x1F,
-    0xAD, 0x86, 0x5F, 0x49, 0x01, 0x8D, 0x86, 0x5F, 0xA9, 0x01, 0x8D, 0x87, 0x5F, 0xAD, 0x86, 0x5F,
-    0xF0, 0x08, 0xA9, 0x00, 0x8D, 0x15, 0x40, 0x4C, 0x7F, 0x52, 0xA9, 0x0F, 0x8D, 0x15, 0x40, 0xCE,
-    0x85, 0x5F, 0x68, 0xA8, 0x68, 0xAA, 0x68, 0x40, 0x40, 0x4C, 0x00, 0x00, 0x4C, 0x00, 0x00, 0x0F,
-    0x30, 0x11, 0x21, 0x0F, 0x21, 0x11, 0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x0F,
-    0x30, 0x11, 0x21, 0x0F, 0x21, 0x11, 0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x50,
-    0x41, 0x55, 0x53, 0x45,
+    0x03, 0x5F, 0xA9, 0x00, 0x8D, 0x00, 0x20, 0x8D, 0x01, 0x20, 0x8D, 0x81, 0x5F, 0x8D, 0x86, 0x5F,
+    0x8D, 0x87, 0x5F, 0x8D, 0x85, 0x5F, 0xA2, 0x00, 0x9D, 0x00, 0x40, 0xE8, 0xE0, 0x14, 0xD0, 0xF8,
+    0x8D, 0x15, 0x40, 0xA9, 0x0F, 0x8D, 0x15, 0x40, 0xA9, 0x40, 0x8D, 0x17, 0x40, 0xA9, 0x00, 0xAA,
+    0x9D, 0x00, 0x00, 0x9D, 0x00, 0x01, 0x9D, 0x00, 0x02, 0x9D, 0x00, 0x03, 0x9D, 0x00, 0x04, 0x9D,
+    0x00, 0x05, 0x9D, 0x00, 0x06, 0x9D, 0x00, 0x07, 0xE8, 0xD0, 0xE5, 0x9D, 0x00, 0x60, 0x9D, 0x00,
+    0x61, 0x9D, 0x00, 0x62, 0x9D, 0x00, 0x63, 0x9D, 0x00, 0x64, 0x9D, 0x00, 0x65, 0x9D, 0x00, 0x66,
+    0x9D, 0x00, 0x67, 0x9D, 0x00, 0x68, 0x9D, 0x00, 0x69, 0x9D, 0x00, 0x6A, 0x9D, 0x00, 0x6B, 0x9D,
+    0x00, 0x6C, 0x9D, 0x00, 0x6D, 0x9D, 0x00, 0x6E, 0x9D, 0x00, 0x6F, 0x9D, 0x00, 0x70, 0x9D, 0x00,
+    0x71, 0x9D, 0x00, 0x72, 0x9D, 0x00, 0x73, 0x9D, 0x00, 0x74, 0x9D, 0x00, 0x75, 0x9D, 0x00, 0x76,
+    0x9D, 0x00, 0x77, 0x9D, 0x00, 0x78, 0x9D, 0x00, 0x79, 0x9D, 0x00, 0x7A, 0x9D, 0x00, 0x7B, 0x9D,
+    0x00, 0x7C, 0x9D, 0x00, 0x7D, 0x9D, 0x00, 0x7E, 0x9D, 0x00, 0x7F, 0xE8, 0xD0, 0x9D, 0xA2, 0xFF,
+    0x9A, 0xA2, 0x00, 0xBD, 0x08, 0x5F, 0x9D, 0xF8, 0x5F, 0xE8, 0xE0, 0x08, 0xD0, 0xF5, 0xA9, 0x22,
+    0x8D, 0x06, 0x20, 0xA9, 0x2E, 0x8D, 0x06, 0x20, 0xAD, 0x80, 0x5F, 0x20, 0xA2, 0x51, 0xA9, 0x22,
+    0x8D, 0x06, 0x20, 0xA9, 0x34, 0x8D, 0x06, 0x20, 0xAD, 0x00, 0x5F, 0x20, 0xA2, 0x51, 0xA9, 0x22,
+    0x8D, 0x06, 0x20, 0xA9, 0x6D, 0x8D, 0x06, 0x20, 0xA9, 0x20, 0xA2, 0x05, 0x8D, 0x07, 0x20, 0xCA,
+    0xD0, 0xFA, 0xAE, 0x80, 0x5F, 0xCA, 0x8A, 0xA2, 0x00, 0xA0, 0x00, 0x20, 0xC3, 0x52, 0xA9, 0x01,
+    0x8D, 0x03, 0x5F, 0x2C, 0x02, 0x20, 0x10, 0xFB, 0xA9, 0x00, 0x8D, 0x05, 0x20, 0x8D, 0x05, 0x20,
+    0xA9, 0x80, 0x8D, 0x00, 0x20, 0xA9, 0x0A, 0x8D, 0x01, 0x20, 0xAD, 0x81, 0x5F, 0xF0, 0x03, 0x4C,
+    0x6D, 0x50, 0xAD, 0x86, 0x5F, 0xD0, 0xF3, 0xAD, 0x02, 0x5F, 0xF0, 0xEE, 0x20, 0xC6, 0x52, 0x4C,
+    0x8A, 0x51, 0xA2, 0x30, 0xC9, 0x64, 0x90, 0x05, 0xE9, 0x64, 0xE8, 0xD0, 0xF7, 0x8E, 0x07, 0x20,
+    0xA2, 0x30, 0xC9, 0x0A, 0x90, 0x05, 0xE9, 0x0A, 0xE8, 0xD0, 0xF7, 0x8E, 0x07, 0x20, 0x09, 0x30,
+    0x8D, 0x07, 0x20, 0x60, 0x48, 0x8A, 0x48, 0x98, 0x48, 0xAD, 0x85, 0x5F, 0xF0, 0x03, 0x4C, 0xBC,
+    0x52, 0xEE, 0x85, 0x5F, 0xAD, 0x87, 0x5F, 0xF0, 0x3E, 0xA9, 0x00, 0x8D, 0x87, 0x5F, 0xAD, 0x02,
+    0x20, 0xA9, 0x22, 0x8D, 0x06, 0x20, 0xA9, 0x6D, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xAD, 0x86, 0x5F,
+    0xF0, 0x0E, 0xBD, 0xE9, 0x52, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x05, 0xD0, 0xF5, 0x4C, 0x0A, 0x52,
+    0xA9, 0x20, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x05, 0xD0, 0xF8, 0xA9, 0x00, 0x8D, 0x05, 0x20, 0x8D,
+    0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00, 0x20, 0xA9, 0x01, 0x8D, 0x16, 0x40, 0xA9, 0x00, 0x8D, 0x16,
+    0x40, 0xA2, 0x08, 0xAD, 0x16, 0x40, 0x4A, 0x2E, 0x82, 0x5F, 0xCA, 0xD0, 0xF6, 0xAD, 0x83, 0x5F,
+    0x49, 0xFF, 0x2D, 0x82, 0x5F, 0x8D, 0x84, 0x5F, 0xAD, 0x82, 0x5F, 0x8D, 0x83, 0x5F, 0xAD, 0x84,
+    0x5F, 0x4A, 0x90, 0x17, 0xEE, 0x80, 0x5F, 0xAD, 0x80, 0x5F, 0xF0, 0x07, 0xCD, 0x00, 0x5F, 0xF0,
+    0x24, 0x90, 0x22, 0xA9, 0x01, 0x8D, 0x80, 0x5F, 0x4C, 0x75, 0x52, 0xAD, 0x84, 0x5F, 0x29, 0x02,
+    0xF0, 0x0E, 0xCE, 0x80, 0x5F, 0xD0, 0x0E, 0xAD, 0x00, 0x5F, 0x8D, 0x80, 0x5F, 0x4C, 0x75, 0x52,
+    0xAD, 0x84, 0x5F, 0x10, 0x08, 0xA9, 0x01, 0x8D, 0x81, 0x5F, 0x4C, 0xA6, 0x52, 0xAD, 0x84, 0x5F,
+    0x29, 0x10, 0xF0, 0x22, 0xAD, 0x86, 0x5F, 0x49, 0x01, 0x8D, 0x86, 0x5F, 0xA9, 0x01, 0x8D, 0x87,
+    0x5F, 0xAD, 0x86, 0x5F, 0xF0, 0x0B, 0xA9, 0x00, 0x8D, 0x15, 0x40, 0x8D, 0x03, 0x5F, 0x4C, 0xA6,
+    0x52, 0xA9, 0x01, 0x8D, 0x81, 0x5F, 0xCE, 0x85, 0x5F, 0xAD, 0x81, 0x5F, 0xF0, 0x03, 0x4C, 0x6D,
+    0x50, 0xAD, 0x86, 0x5F, 0xF0, 0x06, 0xA2, 0xFF, 0x9A, 0x4C, 0x8A, 0x51, 0x68, 0xA8, 0x68, 0xAA,
+    0x68, 0x40, 0x40, 0x4C, 0x00, 0x00, 0x4C, 0x00, 0x00, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x21, 0x11,
+    0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x21, 0x11,
+    0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x53, 0x54, 0x4F, 0x50, 0x20,
 };
 static const uint8_t nsfd_nt[1024] = {
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
@@ -409,8 +442,8 @@ static const uint8_t nsfd_nt[1024] = {
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
-    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x53, 0x4F, 0x4E, 0x47, 0x20, 0x20, 0x30,
-    0x30, 0x20, 0x2F, 0x20, 0x30, 0x30, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x53, 0x4F, 0x4E, 0x47, 0x20, 0x20, 0x30, 0x30,
+    0x30, 0x20, 0x2F, 0x20, 0x30, 0x30, 0x30, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
@@ -425,8 +458,8 @@ static const uint8_t nsfd_nt[1024] = {
     0x48, 0x54, 0x20, 0x20, 0x53, 0x4F, 0x4E, 0x47, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
-    0x20, 0x20, 0x20, 0x41, 0x20, 0x20, 0x52, 0x45, 0x53, 0x54, 0x41, 0x52, 0x54, 0x20, 0x20, 0x20,
-    0x20, 0x53, 0x54, 0x41, 0x52, 0x54, 0x20, 0x20, 0x50, 0x41, 0x55, 0x53, 0x45, 0x20, 0x20, 0x20,
+    0x20, 0x41, 0x20, 0x52, 0x45, 0x53, 0x54, 0x41, 0x52, 0x54, 0x20, 0x20, 0x53, 0x54, 0x41, 0x52,
+    0x54, 0x20, 0x53, 0x54, 0x4F, 0x50, 0x2F, 0x52, 0x45, 0x53, 0x54, 0x41, 0x52, 0x54, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
