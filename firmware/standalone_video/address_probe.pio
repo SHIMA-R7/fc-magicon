@@ -1,0 +1,17 @@
+; Passive probes. No pin or direction writes, no DMA, never acknowledge the bus.
+; IN_BASE=26; PPU A8/A9 are snapshot bits8/9, A13 is bit16.
+.program nt_write_probe
+.wrap_target
+    wait 1 pin 15
+    wait 0 pin 15
+    mov isr, pins
+    push block
+.wrap
+
+.program nt_read_probe
+.wrap_target
+    wait 1 pin 14
+    wait 0 pin 14
+    mov isr, pins
+    push block
+.wrap

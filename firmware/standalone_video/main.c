@@ -7,6 +7,35 @@
 #include "video_cart.h"
 #include "flash_audio.h"
 #include "fcpv.h"
+#if FC_REMOTE_DESKTOP
+#include "desktop_usb.h"
+#endif
+#if FC_PLAYER_AUDIO_LOG
+#include "pico/stdio_usb.h"
+#endif
+#ifndef FC_PLAYER_A9_REMAP
+#define FC_PLAYER_A9_REMAP 0
+#endif
+#if FC_PLAYER_BOOT_LOG
+#include "hardware/pio.h"
+extern volatile uint32_t stat_cpu,stat_ppu,stat_wr,diag_last_cpu_header;
+static void boot_log(const char *phase) {
+    printf("BOOT phase=%s sense=%u gpio=%012llX pc=%u,%u cpu=%lu wr=%lu header=%08lX io11=%02X io12=%02X\n",
+        phase,gpio_get(46),(unsigned long long)gpio_get_all64(),
+        pio_sm_get_pc(pio0,0),pio_sm_get_pc(pio1,0),
+        (unsigned long)stat_cpu,(unsigned long)stat_wr,(unsigned long)diag_last_cpu_header,
+        cart_video_diag_byte(0x11),cart_video_diag_byte(0x12));
+}
+#else
+#define boot_log(phase) ((void)0)
+#endif
+static inline void player_led_put(bool value) {
+#if !FC_PLAYER_A9_REMAP
+    gpio_put(39,value);
+#else
+    (void)value; // GPIO39 is now the external A9 input.
+#endif
+}
 #ifndef FC_PLAYER_CPU_WINDOW
 #define FC_PLAYER_CPU_WINDOW 0
 #endif
@@ -26,8 +55,13 @@ static void stop_with_code(unsigned code) {
     flash_audio_stop();
     printf("PLAYER FAULT %u\n",code);
     for(;;) {
+        boot_log("FAULT");
+#if FC_PLAYER_BOOT_LOG
+        cart_boot_log();
+#endif
+        printf("PLAYER FAULT %u\n",code);
         for(unsigned i=0;i<code;i++) {
-            gpio_put(39,1);sleep_ms(100);gpio_put(39,0);sleep_ms(150);
+            player_led_put(1);sleep_ms(100);player_led_put(0);sleep_ms(150);
         }
         sleep_ms(1000);
     }
@@ -42,11 +76,18 @@ static bool wait_for_vblank(void) {
     return true;
 }
 #if FC_PLAYER_NT_STRESS
+#if FC_PLAYER_ADDRESS_PROBE
+#include "address_probe.h"
+#endif
 static void run_nt_stress(void) {
     static uint8_t reports[52][32];
     unsigned count=0,protocol_errors=0;
     uint64_t start=time_us_64();
     uint8_t status=0;
+#if FC_PLAYER_ADDRESS_PROBE
+    nt_address_probe address_pins={0};
+    nt_address_probe_init();
+#endif
 #if FC_PLAYER_CPU_WINDOW
     uint8_t last_request=0;
 #endif
@@ -54,6 +95,9 @@ static void run_nt_stress(void) {
     pin_audit pins={0};
 #endif
     while(time_us_64()-start<60000000u) {
+#if FC_PLAYER_ADDRESS_PROBE
+        nt_address_probe_poll(&address_pins);
+#endif
 #if FC_PLAYER_CPU_WINDOW
         uint8_t request=cart_video_diag_byte(0x73);
         if(request>=1 && request<=104 && request!=last_request) {
@@ -70,7 +114,7 @@ static void run_nt_stress(void) {
             __dmb();
             uint8_t *r=reports[count];
             for(unsigned i=0;i<32;i++)r[i]=cart_video_diag_byte(0x80+i);
-            if(r[0]!=sequence || r[30]!=(FC_PLAYER_CPU_WINDOW?0xc5:0xa5))protocol_errors++;
+            if(r[0]!=sequence || r[30]!=(FC_PLAYER_PAGE_SAMPLES?0xd5:FC_PLAYER_CPU_WINDOW?0xc5:0xa5))protocol_errors++;
             count++;cart_nt_stress_ack(sequence);
         }
         status=cart_video_readback_status();
@@ -78,9 +122,16 @@ static void run_nt_stress(void) {
         tight_loop_contents();
     }
     bool complete=count==52 && (status==2 || status==3);
+#if FC_PLAYER_ADDRESS_PROBE
+    nt_address_probe_poll(&address_pins);
+    pio_sm_set_enabled(pio1,0,false);pio_sm_set_enabled(pio1,1,false);
+#endif
     stdio_init_all();
     for(;;) {
         if(stdio_usb_connected()) {
+#if FC_PLAYER_ADDRESS_PROBE
+            nt_address_probe_report(&address_pins);
+#endif
 #if FC_PLAYER_PIN_AUDIT
             printf("GLOG samples=%lu high=%012llX low=%012llX changed=%012llX\n",(unsigned long)pins.samples,(unsigned long long)pins.high,(unsigned long long)pins.low,(unsigned long long)pins.changed);
 #endif
@@ -93,21 +144,24 @@ static void run_nt_stress(void) {
         }
         unsigned pulses=!complete || protocol_errors?3:status==2?1:2;
         for(unsigned i=0;i<pulses;i++) {
-            gpio_put(39,1);sleep_ms(150);gpio_put(39,0);sleep_ms(200);
+            player_led_put(1);sleep_ms(150);player_led_put(0);sleep_ms(200);
         }
         sleep_ms(1000);
     }
 }
 #endif
 int main(void) {
+    cart_info_t cart;
     for(uint p=0;p<=46;p++) {
-        if(p==39)continue;
+        if(p==39 && !FC_PLAYER_A9_REMAP)continue;
         gpio_init(p);gpio_set_dir(p,GPIO_IN);gpio_disable_pulls(p);
 #if FC_PLAYER_COLD_BOOT
         gpio_set_oeover(p,GPIO_OVERRIDE_LOW);
 #endif
     }
+#if !FC_PLAYER_A9_REMAP
     gpio_init(39);gpio_set_dir(39,GPIO_OUT);
+#endif
     vreg_set_voltage(VREG_VOLTAGE_1_20);
 #if FC_PLAYER_COLD_BOOT
     // SDK2.3.1 already waits for VREG_UPDATE_IN_PROGRESS. Check regulation too,
@@ -120,18 +174,32 @@ int main(void) {
 #if FC_PLAYER_COLD_BOOT
     // No USB initialisation, no image conversion or whole-media CRC on this path.
     cart_boot_prepare();
-    fc_wait_power();fc_arm_power_guard();
-    cart_boot_enable();
-#endif
-    cart_info_t cart;
+#if FC_PLAYER_DIRECT_BOOT
+    // USB-first diagnostic: populate the final PRG before CPU PIO is enabled.
     const char *error=cart_load((const uint8_t *)"FCRD",4,&cart);
     if(error)panic("remote driver load failed");
+#endif
+#if FC_PLAYER_BOOT_LOG
+    stdio_init_all(); // This diagnostic is tested with USB powered before FC ON.
+#endif
+    boot_log("WAIT_POWER");
+    fc_wait_power();fc_arm_power_guard();
+    cart_boot_enable();
+    boot_log("POWER_DETECTED");
+    boot_log("BOOTSTRAP_ENABLED");
+#endif
+#if !FC_PLAYER_DIRECT_BOOT
+    const char *error=cart_load((const uint8_t *)"FCRD",4,&cart);
+    if(error)panic("remote driver load failed");
+#endif
+    boot_log("CART_LOADED");
 #if !FC_PLAYER_COLD_BOOT
     bool usb_prepared=!gpio_get(46);
     if(usb_prepared)stdio_init_all(); // optional recovery while FC is off; no host wait
     fc_wait_power();fc_arm_power_guard();
 #endif
     cart_start();
+    boot_log("CART_STARTED");
 #if FC_PLAYER_NT_STRESS
     run_nt_stress(); // Rendering/audio/media staging are never started in this mode.
 #endif
@@ -140,6 +208,11 @@ int main(void) {
 #endif
     // Start the built-in driver before expensive media validation; no USB waits.
     if(!wait_for_vblank())stop_with_code(1);
+    boot_log("VBLANK");
+#if FC_REMOTE_DESKTOP
+    // Keep the proven bus bootstrap; enable USB only after the FC driver runs.
+    desktop_usb_run();
+#endif
     const uint8_t *media=(const uint8_t *)(XIP_BASE+0x00800000u);
     fcpv_info info;
     if(!fcpv_parse(media,0x00800000u,&info) ||
@@ -148,6 +221,7 @@ int main(void) {
         stop_with_code(2);
     }
     if(!cart_video_stage(media+info.video))panic("initial frame busy");
+    boot_log("FRAME_STAGED");
     uint64_t staged_at=time_us_64();
     while(cart_video_pending()) {
         if(time_us_64()-staged_at>2000000)stop_with_code(3);
@@ -159,7 +233,7 @@ int main(void) {
     uint8_t status;
 #if FC_PLAYER_FRAME_READBACK
     uint32_t checked=0;
-    gpio_put(39,1);
+    player_led_put(1);
     for(;;) {
 #endif
     while((status=cart_video_readback_status())!=2 && status!=3 && status!=4) {
@@ -205,23 +279,39 @@ int main(void) {
 #endif
         unsigned pulses=status==2?1:status==4?3:2;
         for(unsigned i=0;i<pulses;i++) {
-            gpio_put(39,1);sleep_ms(150);gpio_put(39,0);sleep_ms(200);
+            player_led_put(1);sleep_ms(150);player_led_put(0);sleep_ms(200);
         }
         sleep_ms(1000);
     }
 #endif
+#if FC_PLAYER_AUDIO_LOG
+    // Preserve the successful cold-bootstrap path, including the uninstrumented
+    // CPU responder. Start USB only after the first frame has been committed,
+    // and before the audio refill deadline begins.
+    stdio_init_all();
+#endif
     flash_audio_start(media+info.audio,info.samples,info.rate);
+    boot_log("AUDIO_STARTED");
     uint32_t frame=1;
+#if FC_PLAYER_AUDIO_LOG
+    uint64_t next_audio_log=time_us_64()+1000000;
+#endif
     for(;;) {
         uint32_t played=flash_audio_poll();
         if(flash_audio_faulted())stop_with_code(4);
         if(cart_video_pending() && time_us_64()-staged_at>500000)stop_with_code(5);
         if(frame<info.frames && !cart_video_pending() && fcpv_frame_due(&info,frame,played)) {
             if(cart_video_stage(media+info.video+(size_t)frame*FCPV_FRAME)) {
-                frame++;staged_at=time_us_64();gpio_put(39,!gpio_get(39));
+                frame++;staged_at=time_us_64();player_led_put(!gpio_get(39));
             }
         }
         // Last picture stays displayed; the audio ring is filled with silence at EOF.
+#if FC_PLAYER_AUDIO_LOG
+        if(time_us_64()>=next_audio_log) {
+            next_audio_log=time_us_64()+1000000;
+            if(stdio_usb_connected())flash_audio_log();
+        }
+#endif
         tight_loop_contents();
     }
 }

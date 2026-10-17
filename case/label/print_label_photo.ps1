@@ -3,7 +3,7 @@
 #   python make_label.py --px 48 --out label_print.png(約 1200dpi)を先に作っておく
 # 用紙の種類(光沢紙)・品質(写真)・L 判・横置きを、この印刷だけに設定する(プリンターの既定の設定は変えない):
 #   PrintTicket に設定 → DEVMODE に変換 → System.Drawing の PrinterSettings に渡す
-param([string]$Printer = "Brother DCP-J1270N Printer", [switch]$DryRun)
+param([string]$Printer = "Brother DCP-J1270N Printer", [switch]$DryRun, [ValidateRange(0, 4)][double]$BleedMM = 2.0)
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Printing, ReachFramework, System.Drawing
 
@@ -44,6 +44,7 @@ $bytes = New-Object byte[] $p
 [void][W.G]::GlobalUnlock($hg); [void][W.G]::GlobalFree($hg)
 $back = $conv.ConvertDevModeToPrintTicket($bytes)
 "確認(実際に渡る設定): 紙の種類 {0}  品質 {1}  向き {2}" -f $back.PageMediaType, $back.OutputQuality, $back.PageOrientation
+"塗り足し: 外周 {0}mm、仕上がり {1} x {2}mm（寸法・穴位置は維持）" -f $BleedMM, $LW, $LH
 if ($DryRun) { $img.Dispose(); return }
 
 $doc.add_PrintPage({
@@ -55,12 +56,13 @@ $doc.add_PrintPage({
     $gr.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $pw = $e.PageBounds.Width * 0.254; $ph = $e.PageBounds.Height * 0.254                   # 横置きなら 127 x 88.9
     $ox = ($pw - $LW) / 2; $oy = ($ph - $LH) / 2
+    $gr.FillRectangle([System.Drawing.Brushes]::Black, [single]($ox - $BleedMM), [single]($oy - $BleedMM), [single]($LW + 2 * $BleedMM), [single]($LH + 2 * $BleedMM))
     $gr.DrawImage($img, [single]$ox, [single]$oy, [single]$LW, [single]$LH)
     $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::Black), 0.15
     foreach ($c in @(@($ox, $oy, -1, -1), @(($ox + $LW), $oy, 1, -1), @($ox, ($oy + $LH), -1, 1), @(($ox + $LW), ($oy + $LH), 1, 1))) {
         $x = $c[0]; $y = $c[1]; $sx = $c[2]; $sy = $c[3]
-        $gr.DrawLine($pen, [single]($x + $sx * 1), [single]$y, [single]($x + $sx * 5), [single]$y)
-        $gr.DrawLine($pen, [single]$x, [single]($y + $sy * 1), [single]$x, [single]($y + $sy * 5))
+        $gr.DrawLine($pen, [single]($x + $sx * ($BleedMM + 1)), [single]$y, [single]($x + $sx * ($BleedMM + 5)), [single]$y)
+        $gr.DrawLine($pen, [single]$x, [single]($y + $sy * ($BleedMM + 1)), [single]$x, [single]($y + $sy * ($BleedMM + 5)))
     }
     $e.HasMorePages = $false
 })

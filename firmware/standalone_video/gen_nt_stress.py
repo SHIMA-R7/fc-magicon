@@ -5,6 +5,10 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from asm6502 import Asm
 cpu_window='--cpu-window' in sys.argv
 settle_ppu='--settle-ppu' in sys.argv
+stage_cpu='--stage-cpu' in sys.argv
+samples='--samples' in sys.argv
+if samples and not stage_cpu:raise ValueError('--samples requires --stage-cpu')
+if stage_cpu and not cpu_window:raise ValueError('--stage-cpu requires --cpu-window')
 
 PAT,PID,BANK,TARGET,REP,PAGE,SALT,SEQ,EXP,ACT,DIFF,ANY=range(0x10,0x1c)
 R=0x20
@@ -29,7 +33,7 @@ a.label('clear');a.bytes_([0x95,R],'STA report,X');a.inx();a.cpx_imm(32);a.bne('
 a.lda_imm(255);a.sta_zp(R+6);a.sta_zp(R+7)
 for source,dest in ((PID,R+1),(TARGET,R+2),(REP,R+3)):
     a.lda_zp(source);a.sta_zp(dest)
-a.lda_imm(4);a.sta_zp(READPASS if cpu_window else R+28);a.lda_imm(0xc5 if cpu_window else 0xa5);a.sta_zp(R+30)
+a.lda_imm(4);a.sta_zp(READPASS if cpu_window else R+28);a.lda_imm(0xd5 if samples else 0xc5 if cpu_window else 0xa5);a.sta_zp(R+30)
 a.lda_zp(PID);a.tax();a.lda_absx('patterns');a.sta_zp(PAT)
 if not cpu_window:a.sta_zp(R+11)
 # Write distinct complementary values to both physical tables before checking either.
@@ -41,7 +45,9 @@ a.lda_imm(0);a.sta_zp(PAGE);a.sta_zp(SALT);a.ldy_imm(0)
 a.label('read_byte');a.jsr('expected');a.sta_zp(EXP)
 a.lda_abs(0x2007);a.sta_zp(ACT);a.bytes_([0xc5,EXP],'CMP expected');a.beq('match')
 a.jsr('mismatch')
-a.label('match');a.iny();a.bne('read_byte')
+a.label('match')
+if samples:a.jsr('sample_ppu')
+a.iny();a.bne('read_byte')
 a.inc_zp(PAGE);a.lda_zp(SALT);a.clc();a.adc_imm(0x41);a.sta_zp(SALT)
 a.lda_zp(PAGE);a.cmp_imm(4);a.bne('read_byte')
 a.dec_zp(READPASS if cpu_window else R+28);a.bne('read_pass')
@@ -80,6 +86,15 @@ if cpu_window:
     a.inc_zp(REQUEST);a.lda_zp(REQUEST);a.sta(0x5f73)
     a.label('source_wait');a.lda_zp(REQUEST);a.cmp_abs(0x5f74);a.bne('source_wait')
     a.lda_imm(0);a.sta_zp(0x0c);a.lda_imm(0x60);a.sta_zp(0x0d)
+    if stage_cpu:
+        # Separate external CPU reads from PPU writes using 1KiB of FC RAM.
+        # $0400-$07ff does not overlap zero page, stack or the report at $20.
+        a.lda_imm(0);a.sta_zp(0x0e);a.lda_imm(4);a.sta_zp(0x0f)
+        a.ldx_imm(4);a.ldy_imm(0)
+        a.label('stage_copy');a.lda_indy(0x0c);a.bytes_([0x91,0x0e],'STA (stage),Y')
+        a.iny();a.bne('stage_copy');a.inc_zp(0x0d);a.inc_zp(0x0f)
+        a.dex();a.bne('stage_copy')
+        a.lda_imm(4);a.sta_zp(0x0d)
 a.jsr('address');a.lda_imm(0);a.sta_zp(PAGE);a.sta_zp(SALT);a.ldy_imm(0)
 a.label('write_byte');a.jsr('expected')
 if cpu_window:
@@ -87,7 +102,9 @@ if cpu_window:
     a.inc_zp(R+28);a.bne('source_counted');a.inc_zp(R+31)
     a.label('source_counted');a.lda_imm(1);a.sta_zp(ANY)
     a.lda_zp(ACT);a.bytes_([0x45,EXP],'EOR expected');a.ora_zp(R+11);a.sta_zp(R+11)
-    a.label('source_match');a.lda_zp(ACT)
+    a.label('source_match')
+    if samples:a.jsr('sample_cpu')
+    a.lda_zp(ACT)
 a.sta(0x2007);a.iny();a.bne('write_byte')
 a.inc_zp(PAGE);a.lda_zp(SALT);a.clc();a.adc_imm(0x41);a.sta_zp(SALT)
 if cpu_window:a.inc_zp(0x0d)
@@ -99,10 +116,21 @@ a.lda_zp(EXP);a.sta_zp(R+8);a.lda_zp(ACT);a.sta_zp(R+9)
 a.label('not_first');a.inc_zp(R+4);a.bne('counted');a.inc_zp(R+5)
 a.label('counted');a.lda_imm(1);a.sta_zp(ANY)
 a.lda_zp(EXP);a.bytes_([0x45,ACT],'EOR actual');a.sta_zp(DIFF);a.ora_zp(R+10);a.sta_zp(R+10)
-a.ldx_imm(0)
-a.label('bit');a.lda_zp(DIFF);a.lsr_a();a.sta_zp(DIFF);a.bcc('next_bit')
-a.bytes_([0xf6,R+12],'INC bit count low,X');a.bne('next_bit');a.bytes_([0xf6,R+13],'INC bit count high,X')
-a.label('next_bit');a.inx();a.inx();a.cpx_imm(16);a.bne('bit');a.rts()
+if not samples:
+    a.ldx_imm(0)
+    a.label('bit');a.lda_zp(DIFF);a.lsr_a();a.sta_zp(DIFF);a.bcc('next_bit')
+    a.bytes_([0xf6,R+12],'INC bit count low,X');a.bne('next_bit');a.bytes_([0xf6,R+13],'INC bit count high,X')
+    a.label('next_bit');a.inx();a.inx();a.cpx_imm(16);a.bne('bit')
+a.rts()
+if samples:
+    a.label('sample_cpu');a.lda_zp(BANK);a.bytes_([0xc5,TARGET],'CMP target bank');a.beq('sample_cpu_target');a.rts()
+    a.label('sample_cpu_target')
+    for name,base in (('cpu',R+12),('ppu',R+20)):
+        if name=='ppu':a.label('sample_ppu')
+        a.tya();a.beq('sample_'+name+'_first');a.cmp_imm(128);a.beq('sample_'+name+'_middle');a.rts()
+        a.label('sample_'+name+'_first');a.lda_zp(PAGE);a.tax();a.lda_zp(ACT);a.bytes_([0x95,base],'STA page sample,X');a.rts()
+        a.label('sample_'+name+'_middle');a.lda_zp(PAGE);a.tax();a.lda_zp(ACT);a.bytes_([0x95,base+4],'STA midpoint sample,X');a.rts()
+
 a.label('irq');a.rti()
 a.label('patterns');a.bytes_([0,255,0x55,0xaa,1,2,4,8,16,32,64,128,0])
 prg,listing=a.build(16384,{'nmi':'irq','reset':'reset','irq':'irq'})

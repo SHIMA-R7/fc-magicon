@@ -7,6 +7,11 @@
 #include "audio_fifo.pio.h"
 #include "flash_audio.h"
 #include "pcm_ring.h"
+#if FC_PLAYER_AUDIO_LOG
+#include <stdio.h>
+#include "hardware/structs/io_bank0.h"
+#include "hardware/structs/pads_bank0.h"
+#endif
 
 #define RING 8192u
 static uint32_t ring[RING] __attribute__((aligned(RING*4)));
@@ -55,6 +60,28 @@ uint32_t flash_audio_poll(void) {
 }
 uint32_t flash_audio_div256(void) { return div256; }
 bool flash_audio_faulted(void) { return deadline.faulted; }
+#if FC_PLAYER_AUDIO_LOG
+void flash_audio_log(void) {
+    if(channel<0){puts("ALOG stopped");return;}
+    uint high=0,changes=0,previous=gpio_get(44),minimum=255,maximum=0;
+    uint32_t index=((uintptr_t)dma_hw->ch[channel].read_addr-(uintptr_t)ring)/4&(RING-1);
+    for(uint i=0;i<512;i++) {
+        uint level=gpio_get(44);high+=level;changes+=(level!=previous);previous=level;
+        uint value=ring[(index+i)&(RING-1)]&255;
+        if(value<minimum)minimum=value;if(value>maximum)maximum=value;
+        busy_wait_us_32(1);
+    }
+    uint base=pio_get_gpio_base(pio2);
+    printf("ALOG played=%lu source_next=%lu/%lu ring_index=%lu pcm=%u..%u pin44_high=%u/512 edges=%u func=%u ctrl=%08lX pad=%08lX status=%08lX pio_base=%u oe=%lu pc=%u fifo=%08lX debug=%08lX div256=%lu dma=%08lX\n",
+        (unsigned long)last_played,(unsigned long)state.next,(unsigned long)state.length,
+        (unsigned long)index,minimum,maximum,high,changes,gpio_get_function(44),
+        (unsigned long)io_bank0_hw->io[44].ctrl,(unsigned long)pads_bank0_hw->io[44],
+        (unsigned long)io_bank0_hw->io[44].status,base,
+        (unsigned long)((pio2->dbg_padoe>>(44-base))&1),pio_sm_get_pc(pio2,2),
+        (unsigned long)pio2->flevel,(unsigned long)pio2->fdebug,(unsigned long)div256,
+        (unsigned long)dma_hw->ch[channel].read_addr);
+}
+#endif
 void flash_audio_stop(void) {
     if(channel<0)return;
     // Stop fetching stale samples. Keep mid-level PWM, rather than DC low.

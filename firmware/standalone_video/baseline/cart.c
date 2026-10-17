@@ -43,7 +43,13 @@ static void __not_in_flash_func(split_power_lost)(void);
 #include "mmc3_a12.pio.h"
 #include "rd_width.pio.h"
 #include "ppu_constant.pio.h"
+#if FC_PLAYER_A9_REMAP
+#include "ppu_lookup_a9_39.pio.h"
+#define ppu_lookup_program ppu_lookup_a9_39_program
+#define ppu_lookup_program_init ppu_lookup_a9_39_program_init
+#else
 #include "ppu_lookup.pio.h"
+#endif
 #include "hardware/dma.h"
 #include "hardware/structs/busctrl.h"
 #include "hardware/irq.h"
@@ -77,15 +83,29 @@ static void diag_dma_chr_init(const uint8_t *source) {
 #include "cart.h"
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
 #if FC_REMOTE_FULL
-#if FC_PLAYER_NT_STRESS
+#if FC_REMOTE_DESKTOP
+#include "desktop_driver.h"
+#elif FC_PLAYER_NT_STRESS
 #if FC_PLAYER_CPU_WINDOW
+#if FC_PLAYER_CPU_STAGE
+#if FC_PLAYER_PAGE_SAMPLES
+#include "nt_cpu_samples_driver.h"
+#else
+#include "nt_cpu_staged_driver.h"
+#endif
+#else
 #if FC_PLAYER_PPU_SETTLE
 #include "nt_cpu_window_settled_driver.h"
 #else
 #include "nt_cpu_window_driver.h"
 #endif
+#endif
+#else
+#if FC_PLAYER_PPU_SETTLE
+#include "nt_stress_settled_driver.h"
 #else
 #include "nt_stress_driver.h"
+#endif
 #endif
 #elif FC_PLAYER_READBACK
 #if FC_PLAYER_PALETTE_LOG
@@ -1022,8 +1042,23 @@ static void __not_in_flash_func(remote_bus_loop)(void) {
 static fc_boot_state boot_state;
 static bool boot_write_pending;
 static uint16_t boot_write_address;
+#if FC_PLAYER_BOOT_LOG
+static volatile uint32_t boot_trace[32],boot_trace_count,boot_calls;
+void cart_boot_log(void) {
+    printf("BSTATE ready=%u waiting=%u active=%u calls=%lu count=%lu rx=%u tx=%u debug=%08lX\n",
+        atomic_load_explicit(&boot_state.ready,memory_order_acquire),
+        atomic_load_explicit(&boot_state.waiting,memory_order_acquire),boot_state.game_active,
+        (unsigned long)boot_calls,(unsigned long)boot_trace_count,
+        pio_sm_get_rx_fifo_level(pio0,0),pio_sm_get_tx_fifo_level(pio0,0),(unsigned long)pio0->fdebug);
+    for(uint i=0;i<boot_trace_count && i<32;i++)printf("BTRACE %02u %08lX\n",i,(unsigned long)boot_trace[i]);
+}
+#endif
 void cart_boot_reset_protocol(void) {
     fc_boot_init(&boot_state);
+#if FC_PLAYER_DIRECT_BOOT
+    // Only enabled after core0 has prepared the player in SRAM, while FC is OFF.
+    boot_state.game_active=true;
+#endif
     boot_write_pending=false;
 }
 void cart_boot_publish(void) {
@@ -1031,6 +1066,10 @@ void cart_boot_publish(void) {
 }
 bool cart_boot_active(void) { return boot_state.game_active; }
 uint32_t __not_in_flash_func(cart_boot_cpu_access)(uint32_t h) {
+#if FC_PLAYER_BOOT_LOG
+    boot_calls++;
+    if(boot_trace_count<32)boot_trace[boot_trace_count++]=h;
+#endif
     if(boot_state.game_active)return remote_cpu_access(h);
     if(boot_write_pending) {
         fc_boot_write(&boot_state,boot_write_address,(uint8_t)h);
@@ -1102,8 +1141,13 @@ static const char *remote_load(cart_info_t *info) {
     rd_fb_front = rom;
     rd_fb_back = rom + RD_FB_SIZE;
     memset(rom, 0, 2 * RD_FB_SIZE);
+#if FC_REMOTE_DESKTOP
+    rd_text(rd_fb_front,12,8,"REMOTE DESKTOP");
+    rd_text(rd_fb_front,15,8,"WAITING FOR PC...");
+#else
     rd_text(rd_fb_front, 12, 8, "STANDALONE VIDEO");
     rd_text(rd_fb_front, 15, 8, "LOADING VIDEO...");
+#endif
     rd_default_meta(&rd_meta[0]);
     rd_default_meta(&rd_meta[1]);
     rd_meta_front = &rd_meta[0];
@@ -1183,6 +1227,9 @@ bool cart_nt_cpu_source(uint8_t request,uint8_t pattern,uint8_t bank) {
 }
 // 裏の絵を書き終えたら、パレット 32・属性 64・カーソル(x, y、visible)を付けて渡す。次の画面の切れ目で表示される
 void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, int cy, bool visible) {
+#if FC_REMOTE_DESKTOP
+    for(uint i=0;i<32;i++)rd_palette_replies[i]=0x8000ff00u|pal[i];
+#endif
 #if FC_REMOTE_FULL
     remote_full_convert(rd_fb_back);
     // The last NT chunk also carries all 64 per-16x16 palette attributes.
@@ -1238,6 +1285,14 @@ void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, i
 }
 // 6502 が書いたパッド・キーボード: [0] パッド、[1..9] キーボード 9 行、[15] フレームの数
 void cart_remote_io(uint8_t out[16]) { memcpy(out, rd_io, 16); }
+
+#if FC_REMOTE_DESKTOP
+bool cart_desktop_idle(void) {
+    uint8_t *back=cart_remote_back();if(!back)return false;
+    memset(back,0,RD_FB_SIZE);rd_text(back,12,8,"REMOTE DESKTOP");rd_text(back,15,8,"WAITING FOR PC...");
+    rd_meta_t m;rd_default_meta(&m);cart_remote_commit(m.pal,m.attr,0,0,false);return true;
+}
+#endif
 
 // ---- 読み込み ----
 const char *cart_mapper_name(int m) {
@@ -1455,8 +1510,10 @@ void cart_start(void) {
 #endif
 #endif
 #if FC_REMOTE_DMA
+#if !FC_PLAYER_NO_PPU
     ppu_lookup_program_init(pio1,0,pio_add_program(pio1,&ppu_lookup_program),(uint32_t)diag_chr_lookup);
     diag_dma_chr_init(NULL);
+#endif
 #elif FC_DIAG_DIRECT_CHR
 #if FC_DIAG_DMA_CHR
     ppu_lookup_program_init(pio1,0,pio_add_program(pio1,&ppu_lookup_program),(uint32_t)diag_chr_lookup);
@@ -1492,7 +1549,7 @@ void cart_start(void) {
 #if FC_DIAG_LIVE && !FC_DIAG_DIRECT_CHR
     live_ppu_irq_init();
 #endif
-#if !FC_DIAG_CPU_ONLY || FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR
+#if (!FC_DIAG_CPU_ONLY || FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR) && !FC_PLAYER_NO_PPU
     pio_sm_set_enabled(pio1, 0, true);
 #endif
     pio_sm_set_enabled(pio0, 0, true);

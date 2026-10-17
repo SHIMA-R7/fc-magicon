@@ -9,6 +9,7 @@ palette_log='--palette-log' in sys.argv
 palette_readback='--palette-readback' in sys.argv or palette_log
 frame_readback='--frame-readback' in sys.argv or palette_readback
 readback='--readback' in sys.argv or chr_readback or frame_readback or capability
+desktop_keyboard='--desktop-keyboard' in sys.argv
 a=Asm(0xC000)
 a.label('reset');a.sei();a.cld();a.ldx_imm(255);a.txs()
 a.lda_imm(0);a.sta(0x2000);a.sta(0x2001);a.sta(0x4010)
@@ -122,11 +123,25 @@ a.label('scroll');a.sta(0x2006);a.lda_imm(0);a.sta(0x2006);a.sta(0x2005);a.sta(0
 a.lda_zp(6);a.beq('inputs');a.lda_zp(4);a.sta(0x5F11)
 a.label('inputs');a.lda_imm(1);a.sta(0x4016);a.lda_imm(0);a.sta(0x4016);a.ldx_imm(8)
 a.label('pad');a.lda_abs(0x4016);a.lsr_a();a.rol_abs(0x5F00);a.dex();a.bne('pad')
+
+if desktop_keyboard:
+    # Match Famicom-Expand-USB-Adapter's 500us column settling. All PPU
+    # operations above are already complete; the scan may run past VBlank.
+    a.lda_imm(5);a.sta(0x4016);a.jsr('kbwait');a.ldy_imm(0)
+    a.label('kbscan');a.lda_imm(4);a.sta(0x4016);a.jsr('kbwait')
+    a.lda_abs(0x4017);a.and_imm(0x1E);a.lsr_a();a.sta_zp(16)
+    a.lda_imm(6);a.sta(0x4016);a.jsr('kbwait')
+    a.lda_abs(0x4017);a.and_imm(0x1E);a.asl_a();a.asl_a();a.asl_a();a.ora_zp(16)
+    a.sta_absy(0x5F01);a.iny();a.cpy_imm(9);a.bne('kbscan')
+    a.lda_imm(0);a.sta(0x4016)
 a.inc_abs(0x5F0F);a.pla();a.tay();a.pla();a.tax();a.pla();a.rti()
+
+if desktop_keyboard:
+    a.label('kbwait');a.ldx_imm(177);a.label('kbwait_loop');a.dex();a.bne('kbwait_loop');a.rts()
 a.label('irq');a.rti()
 prg,listing=a.build(16384,{'nmi':'nmi','reset':'reset','irq':'irq'})
 def arr(name,data):
     return f'static const uint8_t {name}[{len(data)}]={{\n'+''.join(' '+','.join(f'0x{v:02x}' for v in data[i:i+16])+',\n' for i in range(0,len(data),16))+'};\n'
 out=Path(sys.argv[1]);out.write_text('#pragma once\n#include <stdint.h>\n#define RD_PAL 0x5D00\n#define RD_ATTR 0x5D20\n#define RD_OAM 0x5E00\n#define RD_IO 0x5F00\n'+arr('remote_prg',prg)+arr('remote_spr_chr',bytes(64)))
 out.with_suffix('.bin').write_bytes(prg)
-print('Readback diagnostic driver generated' if readback else 'Atomic video driver generated; sprites and keyboard disabled for video trial')
+print('Desktop keyboard driver generated; 500us settling' if desktop_keyboard else 'Readback diagnostic driver generated' if readback else 'Atomic video driver generated; sprites and keyboard disabled for video trial')

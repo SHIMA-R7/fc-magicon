@@ -1,0 +1,53 @@
+; A9 input moved from GPIO35 to GPIO39. Original GPIO35 is ignored.
+; IN_BASE=26: bits 0..8=A0..A8, 10..12=A10..A12, 13=A9.
+; Reconstruct the original 13-bit table index, retaining the 32KB table.
+.program ppu_lookup_a9_39
+    pull block
+    mov x, osr
+.wrap_target
+start:
+    wait 1 pin 14
+    mov isr, pins
+sample:
+    mov y, isr
+    mov isr, pins
+    jmp pin sample
+    mov osr, y
+    out null, 10
+    out isr, 3
+    in osr, 1
+    in y, 9
+    mov osr, isr
+    mov isr, x
+    in osr, 13
+    in null, 2
+    push block
+    mov osr, y
+    out null, 16
+    out y, 1
+    jmp !y pattern
+    pull block
+    jmp start
+pattern:
+    pull block
+    jmp pin start
+    out pins, 8
+    out pindirs, 8
+    wait 1 pin 14
+    mov osr, null
+    out pindirs, 8
+.wrap
+% c-sdk {
+static inline void ppu_lookup_a9_39_program_init(PIO pio,uint sm,uint offset,uint32_t table) {
+    pio_sm_config c=ppu_lookup_a9_39_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,26);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_out_pins(&c,26,8);
+    sm_config_set_in_shift(&c,false,false,32);
+    sm_config_set_out_shift(&c,true,false,32);
+    for(uint i=26;i<34;i++)pio_gpio_init(pio,i);
+    pio_sm_set_consecutive_pindirs(pio,sm,26,8,false);
+    pio_sm_init(pio,sm,offset,&c);
+    pio_sm_put(pio,sm,table>>15);
+}
+%}

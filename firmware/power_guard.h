@@ -14,7 +14,9 @@
 static void __not_in_flash_func(fc_power_lost)(uint gpio, uint32_t events) {
     (void)gpio; (void)events;
     for (uint p = 0; p <= 45; ++p) {
+#if !FC_PLAYER_A9_REMAP
         if (p == 39) continue; // module LED; GPIO47 is PSRAM CS
+#endif
         hw_write_masked(&io_bank0_hw->io[p].ctrl,
             GPIO_OVERRIDE_LOW << IO_BANK0_GPIO0_CTRL_OEOVER_LSB,
             IO_BANK0_GPIO0_CTRL_OEOVER_BITS);
@@ -32,7 +34,9 @@ static void fc_wait_power(void) {
     uint64_t next_led = time_us_64() + 100000;
     while (!gpio_get(46)) {
         if (time_us_64() >= next_led) {
+#if !FC_PLAYER_A9_REMAP
             sio_hw->gpio_hi_togl = 1u << (39 - 32);
+#endif
             next_led = time_us_64() + 100000;
         }
         sleep_us(10);
