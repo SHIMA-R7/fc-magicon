@@ -24,7 +24,9 @@ foreach($name in @('usb_sender.py','remote_pc.py','remote_protocol.py','nesframe
 }
 Copy-Item -LiteralPath "$firmware\sim\agnes\agnes.c","$firmware\sim\agnes\LICENSE" -Destination "$app\source\firmware\sim\agnes"
 Copy-Item -LiteralPath "$repo\LICENSE" -Destination "$app\source"
-Copy-Item -LiteralPath "$firmware\nano_sfc_mouse" -Destination $app -Recurse
+$nano=Join-Path $app 'nano_sfc_mouse'
+New-Item -ItemType Directory -Force $nano | Out-Null
+Copy-Item -LiteralPath "$firmware\nano_sfc_mouse\nano_sfc_mouse.ino","$firmware\nano_sfc_mouse\usb_mouse_bridge.h" -Destination $nano
 Copy-Item -LiteralPath "$repo\docs\nano_sfc_mouse_20261018.md" -Destination "$app\README-NANO-JA.md"
 & $Python "$PSScriptRoot\package_wifi_licenses.py" $app
 if($LASTEXITCODE){throw 'License packaging failed'}
