@@ -132,18 +132,21 @@ class Resampler:
     """つなぎ目で途切れないよう、前の端を覚えて直線で補間する。前に 3 点の移動平均で高い音を少し落とす(折り返し対策)"""
     def __init__(self, src_rate, dst_rate=RATE):
         self.step = src_rate / dst_rate
-        self.pos = 0.0                                    # 次に取る位置(前の塊の最後の 1 点を 0 とする)
-        self.tail = np.zeros(2, np.float32)
+        self.pos = 0.0
+        self.tail = np.zeros(0, np.float32)
+        self.history = np.zeros(2, np.float32)
 
     def process(self, x):
         if len(x) == 0:
             return np.zeros(0, np.float32)
-        buf = np.concatenate([self.tail, x])
-        smooth = np.convolve(buf, np.array([0.25, 0.5, 0.25], np.float32), mode="same")
-        t = np.arange(self.pos + 1, len(buf) - 1, self.step)      # 補間に前後 1 点ずつ要る
-        out = np.interp(t, np.arange(len(buf)), smooth).astype(np.float32)
-        self.pos = (t[-1] + self.step - (len(buf) - 2)) if len(t) else self.pos - (len(buf) - 2)
-        self.tail = buf[-2:]
+        raw = np.concatenate([self.history, np.asarray(x,np.float32)])
+        smooth = .25*raw[:-2]+.5*raw[1:-1]+.25*raw[2:]
+        self.history = raw[-2:].copy()
+        buf = np.concatenate([self.tail, smooth])
+        t = np.arange(self.pos, len(buf)-1, self.step)
+        out = np.interp(t, np.arange(len(buf)), buf).astype(np.float32)
+        self.pos = (t[-1]+self.step if len(t) else self.pos)-(len(buf)-1)
+        self.tail = buf[-1:].copy()
         return out
 
 

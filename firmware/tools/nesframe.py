@@ -17,6 +17,7 @@ PC の画像を、magicon の画面転送モードの 1 枚(256 x 240、2 ビッ
 import os
 import re
 import struct
+import sys
 from functools import lru_cache
 
 import numpy as np
@@ -26,7 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _nes_colors():
-    src = open(os.path.join(HERE, "..", "sim", "agnes", "agnes.c"), encoding="utf-8").read()
+    base = getattr(sys, '_MEIPASS', os.path.join(HERE, '..'))
+    src = open(os.path.join(base, "sim", "agnes", "agnes.c"), encoding="utf-8").read()
     body = src[src.index("g_colors[64]"):]
     body = body[:body.index("};")]
     cols = re.findall(r"\{0x([0-9a-f]{2}), 0x([0-9a-f]{2}), 0x([0-9a-f]{2}), 0x([0-9a-f]{2})\}", body)

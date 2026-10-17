@@ -25,11 +25,12 @@ import threading
 import time
 import winreg
 
-from PIL import Image
+from PIL import Image,ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nesframe import encode   # noqa: E402
 from remote_protocol import frame_chunks
+from nano_mouse import NanoMouse
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -73,6 +74,10 @@ class Port:
         if not kernel32.WriteFile(self.h, data, len(data), ctypes.byref(done), None) or done.value != len(data):
             raise OSError("書き込みが止まった(カセットが受け取っていない?)")
 
+    def close(self):
+        kernel32.CloseHandle.argtypes = [wt.HANDLE]
+        kernel32.CloseHandle(self.h)
+
 
 class TcpPort:
     """Wi-Fi ブリッジ(ESP32-C6、firmware/wifi_bridge)へ TCP でつなぐ。Port と同じく read は来ている分だけ、write は全部送る"""
@@ -99,6 +104,9 @@ class TcpPort:
         except socket.timeout:
             raise OSError("書き込みが止まった(カセットが受け取っていない?)")
 
+    def close(self):
+        self.s.close()
+
 
 class IoThread(threading.Thread):
     """COM / TCP の読み書きを別スレッドでやる。画面を作っている間に前の 1 枚を送る
@@ -113,6 +121,7 @@ class IoThread(threading.Thread):
         self.pending = None
         self.audio = []                                  # 音のパケット(画面より先に送る)
         self.error = None
+        self.closing = False
         self.wake = threading.Event()
         self.start()
 
@@ -122,10 +131,12 @@ class IoThread(threading.Thread):
                 with self.lock:
                     audio, self.audio = self.audio, []
                     pkt, self.pending = self.pending, None
+                    if self.closing and not audio and pkt is None:
+                        break
                 if audio:
                     self.port.write(b"".join(audio))
                 if pkt is not None:
-                    parts = frame_chunks(pkt) if self.chunked else [pkt]
+                    parts = frame_chunks(pkt) if self.chunked and pkt.startswith(b'FCFR') else [pkt]
                     for part in parts:
                         # Never abandon a partially sent frame. New pending frames
                         # wait here, while audio may precede each bounded chunk.
@@ -147,6 +158,13 @@ class IoThread(threading.Thread):
                     self.wake.clear()
         except OSError as e:
             self.error = e
+
+    def close(self):
+        with self.lock:
+            self.closing = True
+        self.wake.set()
+        self.join(timeout=5)
+        self.port.close()
 
     def send_audio(self, pkt):
         with self.lock:
@@ -208,6 +226,11 @@ def send_mouse_button(flag):
     i = INPUT(type=0)
     i.mi = MOUSEINPUT(0, 0, 0, flag, 0, 0)
     user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
+
+def send_mouse_relative(dx,dy):
+    i=INPUT(type=0);i.mi=MOUSEINPUT(dx,dy,0,0x0001,0,0)
+    if user32.SendInput(1,ctypes.byref(i),ctypes.sizeof(INPUT))!=1:
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def send_scancode(code, up):
@@ -387,12 +410,13 @@ class View:
     def grab(self):
         sw, sh = screen_size()
         mx, my = cursor_pos()
-        if self.mode == "zoom":
+        if self.mode in ('mid','zoom'):
+            cw,ch=self.crop_size(sw,sh)
             if self.follow:
-                self.zx = min(max(mx - 128, 0), sw - 256)
-                self.zy = min(max(my - 120, 0), sh - 240)
-            img = self.g.grab((self.zx, self.zy, 256, 240), (0, 0, 256, 240))
-            cx, cy = mx - self.zx, my - self.zy
+                self.zx,self.zy=mx-cw//2,my-ch//2
+            self.zx=min(max(self.zx,0),sw-cw);self.zy=min(max(self.zy,0),sh-ch)
+            img = self.g.grab((self.zx, self.zy, cw, ch), (0, 0, 256, 240))
+            cx, cy = (mx-self.zx)*256//cw,(my-self.zy)*240//ch
         else:
             if self.stretch:
                 w,h=256,240
@@ -406,7 +430,15 @@ class View:
         return img, (max(0, min(255, cx)), max(0, min(239, cy)), visible)
 
     def pc_pixels_per_fc_pixel(self):
-        return 1.0 if self.mode == "zoom" else screen_size()[0] / 256
+        sw,sh=screen_size()
+        return self.crop_size(sw,sh)[0]/256 if self.mode in ('mid','zoom') else sw/256
+
+    def crop_size(self,sw,sh):
+        w,h=(512,480) if self.mode=='mid' else (256,240)
+        return min(w,sw),min(h,sh)
+
+    def cycle(self):
+        self.mode={'fit':'mid','mid':'zoom','zoom':'fit'}[self.mode]
 
 
 def frame_packet(fr, cursor):
@@ -423,19 +455,83 @@ def build_parser():
     ap.add_argument("--tcp", nargs="?", const="fc-magicon.local", metavar="HOST",
                     help="Wi-Fi ブリッジ(ESP32-C6)経由でつなぐ。HOST を省くと fc-magicon.local")
     ap.add_argument("--fps", type=float, help="送る速さの上限(既定: USB 30、Wi-Fi 25。Wi-Fi は 25 までなら遅れ 40ms 前後)")
+    ap.add_argument("--tcp-port", type=int, default=5000, help="C6のTCPポート（既定5000）")
     ap.add_argument("--dry-run", type=int, metavar="N", help="カセット無しで N 枚取り込んで変換し、速さを表示する")
     ap.add_argument("--no-audio", action="store_true", help="PC の音を送らない")
     ap.add_argument("--chunked", action="store_true", help="新しい受信ファーム専用: 映像を1KiBずつ送り、間に音声を挟む")
     ap.add_argument("--audio", choices=["pcm16", "pcm8", "adpcm"],
                     help="音の形式(既定: USB 直結 pcm16 = 64KB/秒、Wi-Fi pcm8 = 32KB/秒。adpcm = 16KB/秒は雑音が多い)")
     ap.add_argument("--volume", type=float, default=1.0, help="送る音の大きさ(1.0 = そのまま)")
+    ap.add_argument("--preview", metavar="PNG", help="変換済み画像を保存して終了する。通信・入力操作なし")
+    ap.add_argument("--seconds", type=float, help="指定秒数で転送を終了する")
+    ap.add_argument("--stop-file", help="このファイルが作られたら転送を終了する")
+    ap.add_argument("--no-input", action="store_true", help="FCからPCへのマウス・キー操作を無効にする")
+    ap.add_argument('--solid',action='store_true',help='混色ディザを使わない')
+    ap.add_argument('--fit-tiles',action='store_true',help='PCで色を考慮して256パターンへ近似する')
+    ap.add_argument('--software-cursor',action='store_true',help='スプライトを使わず小さいカーソルを画像へ描く')
+    ap.add_argument('--relative-mouse',action='store_true',help='ゲーム向けに相対マウスイベントを送る')
+    ap.add_argument('--stop-screen',action='store_true',help='終了時に対応受信ファームへ待機画面を要求する')
+    ap.add_argument('--seam-quality',action='store_true',help='輪郭とタイル境界を優先して近似する（低速）')
+    ap.add_argument('--nano-port',metavar='COMx',help='Nano専用SFCマウスのUSBポート（RP2350とは別）')
+    ap.add_argument('--nano-gain',type=float,default=6,help='SFCマウス感度（既定6倍、1～12倍を目安）')
+    ap.add_argument('--nano-only',action='store_true',help='映像転送をせずNanoマウスだけ使用')
+    ap.add_argument("--capture-delay", type=float, default=0, help="取り込み開始前に待つ秒数")
     return ap
 
 
 def main():
+    for stream in (sys.stdout,sys.stderr):
+        if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8',errors='backslashreplace',line_buffering=True)
     a = build_parser().parse_args()
+    if a.fps is not None and not 0 < a.fps <= 60:
+        sys.exit("fps は 0 より大きく60以下にしてください")
+    if a.seconds is not None and a.seconds <= 0:
+        sys.exit("seconds は 0 より大きくしてください")
+    if not 1 <= a.tcp_port <= 65535:
+        sys.exit("TCPポートは1～65535にしてください")
+    if not 0 <= a.volume <= 8:
+        sys.exit("volume は 0～8 にしてください")
+    if not 0 <= a.capture_delay <= 30:
+        sys.exit("capture-delay は0～30にしてください")
+    if not 0<a.nano_gain<=32:
+        sys.exit('Nano感度は0より大きく32以下にしてください')
+    if a.nano_only and not a.nano_port:sys.exit('NanoのCOMポートを指定してください')
+    if a.nano_port and (a.no_input or (a.port and a.port.upper()==a.nano_port.upper())):
+        sys.exit('NanoにはRP2350と別のCOMポートを指定し、入力を有効にしてください')
+    if a.nano_only:
+        nano=NanoMouse(a.nano_port,send_mouse_relative,send_mouse_button,a.nano_gain);nano.start()
+        begin=time.monotonic()
+        try:
+            while nano.is_alive():
+                if a.stop_file and os.path.exists(a.stop_file):break
+                if a.seconds is not None and time.monotonic()-begin>=a.seconds:break
+                time.sleep(.05)
+        except KeyboardInterrupt:pass
+        finally:nano.stop.set();nano.join(timeout=2)
+        if nano.error:sys.exit(nano.error)
+        return
+    time.sleep(a.capture_delay)
     view = View(stretch=a.stretch)
     mode = "color" if a.color else "gray"
+
+    def convert_image(img,cur,previous=None):
+        if a.software_cursor and cur[2]:
+            img=img.copy();x,y=cur[:2]
+            ImageDraw.Draw(img).polygon([(x,y),(x,y+8),(x+2,y+6),(x+4,y+9),(x+5,y+8),(x+3,y+5),(x+6,y+5)],fill='white',outline='black')
+        fr=encode(img,mode,prev=previous if mode=='color' else None,iters=2 if previous else 4,dither=0 if a.solid else None)
+        if a.fit_tiles:
+            from tile_fit_native import fit_tiles_native
+            raw=fr;fr,_=fit_tiles_native(fr)
+            if a.seam_quality:
+                from tile_seams import improve_frame
+                fr=improve_frame(img,raw,fr)
+        return fr
+
+    if a.preview:
+        img, cur = view.grab()
+        convert_image(img,cur).preview.save(a.preview)
+        print("転送なしプレビューを保存:", a.preview)
+        return
 
     if a.dry_run:
         for vm in ("fit", "zoom"):
@@ -447,7 +543,7 @@ def main():
                 t1 = time.perf_counter()
                 img, cur = view.grab()
                 tg += time.perf_counter() - t1
-                pv = encode(img, mode, prev=pv if mode == "color" else None, iters=2 if pv else 4)
+                pv = convert_image(img,cur,pv)
                 frame_packet(pv, cur)
             dt = (time.perf_counter() - t0) / a.dry_run
             print(f"{vm:4} {mode}: 1 枚 {dt * 1000:.1f}ms(取り込み {tg / a.dry_run * 1000:.1f}ms)= 最大 {1 / dt:.1f} fps")
@@ -456,7 +552,7 @@ def main():
     if a.tcp:
         a.fps = a.fps or 25
         try:
-            port = TcpPort(a.tcp)
+            port = TcpPort(a.tcp, a.tcp_port)
         except OSError as e:
             sys.exit(f"Wi-Fi ブリッジ {a.tcp} につながらない({e})。C6 の電源と Wi-Fi を確認する")
         name = f"{a.tcp}(Wi-Fi)"
@@ -468,13 +564,16 @@ def main():
         port = Port(name)
     print(f"{name} を開いた。{mode}、最大 {a.fps} fps。止める時は Ctrl+C")
     port = IoThread(port, chunked=a.chunked)
+    audio_sender = None
     if not a.no_audio:
         from pcaudio import AudioSender, FORMATS
         # Wi-Fi は画面の枚数を優先して 8 ビット(聞き比べで 16 ビットより少し震えるが、ADPCM より雑音が少ない。2026-09-27)
         name = a.audio or ("pcm8" if a.tcp else "pcm16")
         try:
-            AudioSender(port.send_audio, FORMATS[name], a.volume)
+            audio_sender = AudioSender(port.send_audio, FORMATS[name], a.volume)
             print(f"PC の音も送る(32kHz モノラル、{name})。止めるのは --no-audio")
+            cap=audio_sender.cap
+            print(f'録音形式: {cap.rate}Hz {cap.channels}ch {cap.bits}bit float={cap.is_float}')
         except OSError as e:
             print(f"PC の音を録れない({e})。音無しで続ける")
     rx = b""
@@ -490,14 +589,21 @@ def main():
         """押しっぱなしのキーとマウスのボタンを離す(入力が途切れた時・止める時)"""
         nonlocal pad_prev
         kb.release_all()
-        if pad_prev & 0x80:
+        if not a.nano_port and pad_prev & 0x80:
             send_mouse_button(0x0004)
-        if pad_prev & 0x40:
+        if not a.nano_port and pad_prev & 0x40:
             send_mouse_button(0x0010)
         pad_prev = 0
 
+    nano=None
+    if a.nano_port:
+        nano=NanoMouse(a.nano_port,send_mouse_relative,send_mouse_button,a.nano_gain);nano.start()
     try:
         while True:
+            if a.stop_file and os.path.exists(a.stop_file):
+                break
+            if a.seconds is not None and time.perf_counter() - t_start >= a.seconds:
+                break
             # ---- カセットからの入力 ----
             data = port.read()
             if data:
@@ -508,15 +614,24 @@ def main():
                 last_io = time.perf_counter()
             while True:
                 i = rx.find(b"FCIN")
+                diagnostic=rx.find(b'FCDG')
+                if diagnostic>=0 and (i<0 or diagnostic<i):
+                    if len(rx)<diagnostic+20:rx=rx[diagnostic:];break
+                    stats=struct.unpack_from('<4I',rx,diagnostic+4);rx=rx[diagnostic+20:]
+                    print('音声診断: 受信=%d 捨て=%d 不足=%d 最大処理間隔=%dus'%stats)
+                    continue
                 if i < 0 or len(rx) < i + 20:
                     rx = rx[max(0, len(rx) - 19):] if i < 0 else rx[i:]
                     break
                 io, rx = rx[i + 4:i + 20], rx[i + 20:]
+                if a.no_input:
+                    continue
                 pad = io[0]
                 new = pad & ~pad_prev
                 # マウス: 十字キー(押し続けると速く)
                 dx = (1 if pad & 0x01 else 0) - (1 if pad & 0x02 else 0)
                 dy = (1 if pad & 0x04 else 0) - (1 if pad & 0x08 else 0)
+                if a.nano_port:dx=dy=0  # Nano owns pointer/buttons; FC keeps zoom and keyboard.
                 if dx or dy:
                     held += 1
                     speed = min(1 + held * 0.25, 12) * view.pc_pixels_per_fc_pixel() * 0.5
@@ -526,18 +641,21 @@ def main():
                     step_x, step_y = int(mouse_rx), int(mouse_ry)
                     mouse_rx -= step_x
                     mouse_ry -= step_y
-                    x, y = cursor_pos()
-                    user32.SetCursorPos(x + step_x, y + step_y)
+                    if a.relative_mouse:
+                        send_mouse_relative(step_x,step_y)
+                    else:
+                        x, y = cursor_pos()
+                        user32.SetCursorPos(x + step_x, y + step_y)
                 else:
                     held = 0
                     mouse_rx, mouse_ry = 0.0, 0.0
-                for bit, down, up in ((0x80, 0x0002, 0x0004), (0x40, 0x0008, 0x0010)):      # A = 左、B = 右
+                for bit, down, up in (() if a.nano_port else ((0x80, 0x0002, 0x0004), (0x40, 0x0008, 0x0010))):
                     if (pad ^ pad_prev) & bit:
                         send_mouse_button(down if pad & bit else up)
                 if new & 0x20:                                                              # SELECT
-                    view.mode = "zoom" if view.mode == "fit" else "fit"
+                    view.cycle()
                     print("表示:", view.mode)
-                if new & 0x10 and view.mode == "zoom":                                      # START
+                if new & 0x10 and view.mode in ('mid','zoom'):                                # START
                     view.follow = not view.follow
                     print("追従:", view.follow)
                 pad_prev = pad
@@ -547,7 +665,7 @@ def main():
             if now >= next_t and port.ready():
                 next_t = now + 1 / a.fps
                 img, cur = view.grab()
-                prev = encode(img, mode, prev=prev if mode == "color" else None, iters=2 if prev else 4)   # 組は前の画面から探す(チラつき防止)
+                prev = convert_image(img,cur,prev)
                 port.send(frame_packet(prev, cur))    # 送るのは IoThread(その間に次の 1 枚を作る)
                 sent += 1
                 if sent % 100 == 0:
@@ -555,8 +673,15 @@ def main():
             else:
                 time.sleep(0.001)
     except KeyboardInterrupt:
-        release_all()
         print("止めた")
+    finally:
+        if nano is not None:nano.stop.set();nano.join(timeout=2)
+        release_all()
+        if audio_sender is not None:
+            audio_sender.stop.set()
+            audio_sender.join(timeout=1)
+        if a.stop_screen and not port.error:port.send(b'FCST')
+        port.close()
 
 
 if __name__ == "__main__":
