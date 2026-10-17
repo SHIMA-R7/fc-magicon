@@ -19,7 +19,7 @@ Copy-Item -LiteralPath "$repo\docs\fmv_usb_sender_r2_20261017.md" -Destination "
 Copy-Item -LiteralPath "$repo\LICENSE" -Destination "$app\LICENSE-FC-MAGICON.txt"
 $sources=Join-Path $app 'source\firmware\tools'
 New-Item -ItemType Directory -Force $sources,"$app\source\firmware\sim\agnes" | Out-Null
-foreach($name in @('usb_sender.py','remote_pc.py','remote_protocol.py','nesframe.py','pcaudio.py','tile_fit_native.py','tile_fit_native.c','tile_seams.py','scene_palette.py','nano_mouse.py','build_usb_sender.ps1')){
+foreach($name in @('usb_sender.py','remote_pc.py','remote_protocol.py','nesframe.py','pcaudio.py','tile_fit_native.py','tile_fit_native.c','tile_seams.py','scene_palette.py','nano_mouse.py','win_input_diagnostics.py','build_usb_sender.ps1')){
     Copy-Item -LiteralPath "$PSScriptRoot\$name" -Destination $sources
 }
 Copy-Item -LiteralPath "$firmware\sim\agnes\agnes.c","$firmware\sim\agnes\LICENSE" -Destination "$app\source\firmware\sim\agnes"

@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nesframe import encode   # noqa: E402
 from remote_protocol import frame_chunks
 from nano_mouse import NanoMouse
+from win_input_diagnostics import InputMonitor,context as input_context
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -222,15 +223,30 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wt.DWORD), ("u", _U)]
 
 
+user32.SendInput.argtypes=[wt.UINT,ctypes.POINTER(INPUT),ctypes.c_int]
+user32.SendInput.restype=wt.UINT
+_input_warning_time=0.0
+
+def _send_input(value,kind):
+    global _input_warning_time
+    ctypes.set_last_error(0)
+    count=user32.SendInput(1,ctypes.byref(value),ctypes.sizeof(INPUT))
+    if count!=1:
+        error=ctypes.get_last_error();now=time.monotonic()
+        if now-_input_warning_time>=2:
+            _input_warning_time=now
+            print(f'SendInput失敗: kind={kind} sent={count}/1 WinError={error} context={input_context()}',flush=True)
+            print('権限差による遮断はWinErrorだけでは判別できません。入力先診断と管理者実行で比較してください。',flush=True)
+    return count==1
+
 def send_mouse_button(flag):
     i = INPUT(type=0)
     i.mi = MOUSEINPUT(0, 0, 0, flag, 0, 0)
-    user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
+    _send_input(i,'mouse_button')
 
 def send_mouse_relative(dx,dy):
     i=INPUT(type=0);i.mi=MOUSEINPUT(dx,dy,0,0x0001,0,0)
-    if user32.SendInput(1,ctypes.byref(i),ctypes.sizeof(INPUT))!=1:
-        raise ctypes.WinError(ctypes.get_last_error())
+    _send_input(i,'mouse_move')
 
 
 def send_scancode(code, up):
@@ -238,7 +254,7 @@ def send_scancode(code, up):
     i = INPUT(type=1)
     flags = 0x0008 | (0x0002 if up else 0) | (0x0001 if code > 0xFF else 0)   # SCANCODE | KEYUP | EXTENDEDKEY
     i.ki = KEYBDINPUT(0, code & 0xFF, flags, 0, 0)
-    user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
+    _send_input(i,'keyboard')
 
 
 # ファミリーベーシックのキーボードの並び(nesdev)。[行][i]: i = 0〜3 は列 0 の bit4〜1、4〜7 は列 1 の bit4〜1
@@ -499,6 +515,7 @@ def main():
     if a.nano_port and (a.no_input or (a.port and a.port.upper()==a.nano_port.upper())):
         sys.exit('NanoにはRP2350と別のCOMポートを指定し、入力を有効にしてください')
     if a.nano_only:
+        monitor=InputMonitor();monitor.start()
         nano=NanoMouse(a.nano_port,send_mouse_relative,send_mouse_button,a.nano_gain);nano.start()
         begin=time.monotonic()
         try:
@@ -507,7 +524,8 @@ def main():
                 if a.seconds is not None and time.monotonic()-begin>=a.seconds:break
                 time.sleep(.05)
         except KeyboardInterrupt:pass
-        finally:nano.stop.set();nano.join(timeout=2)
+        finally:
+            nano.stop.set();nano.join(timeout=2);monitor.stop.set();monitor.join(timeout=2)
         if nano.error:sys.exit(nano.error)
         return
     time.sleep(a.capture_delay)
@@ -596,6 +614,7 @@ def main():
         pad_prev = 0
 
     nano=None
+    monitor=InputMonitor();monitor.start()
     if a.nano_port:
         nano=NanoMouse(a.nano_port,send_mouse_relative,send_mouse_button,a.nano_gain);nano.start()
     try:
@@ -676,6 +695,7 @@ def main():
         print("止めた")
     finally:
         if nano is not None:nano.stop.set();nano.join(timeout=2)
+        monitor.stop.set();monitor.join(timeout=2)
         release_all()
         if audio_sender is not None:
             audio_sender.stop.set()

@@ -12,7 +12,7 @@ def main():
     from remote_pc import find_port
     from serial.tools import list_ports
     state=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'FC-MAGICON';state.mkdir(exist_ok=True)
-    root=tk.Tk();root.title('FC-MAGICON USB転送 r2.2');root.geometry('700x650')
+    root=tk.Tk();root.title('FC-MAGICON USB転送 r2.3');root.geometry('740x650')
     panel=ttk.Frame(root,padding=16);panel.pack(fill='both',expand=True)
     ttk.Label(panel,text='FMV → USB → FC-MAGICON',font=('',16)).pack(anchor='w')
     row=ttk.Frame(panel);row.pack(fill='x',pady=12)
@@ -75,6 +75,14 @@ def main():
         nonlocal closing
         closing=True;halt()
         if not process:root.destroy()
+    def diagnose():
+        from win_input_diagnostics import save_snapshot
+        diagnostic=state/f'input-diagnostics-{time.time_ns()}.json'
+        try:
+            save_snapshot(diagnostic)
+            log.insert('end',f'入力診断を保存: {diagnostic}\n');log.see('end')
+            messagebox.showinfo('入力診断',f'診断結果を保存しました。\n{diagnostic}\nブルアカを起動した状態で採取してください。')
+        except Exception as e:messagebox.showerror('入力診断',str(e))
     def poll():
         nonlocal process,handle,position
         if process:
@@ -90,6 +98,7 @@ def main():
     ttk.Button(buttons,text='停止',command=halt).pack(side='left',padx=8)
     ttk.Button(buttons,text='転送なしプレビュー',command=lambda:start(True)).pack(side='left')
     ttk.Button(buttons,text='Nanoマウスのみ',command=lambda:start(nano_only=True)).pack(side='left',padx=8)
+    ttk.Button(buttons,text='入力診断',command=diagnose).pack(side='left')
     refresh();root.protocol('WM_DELETE_WINDOW',close);root.after(200,poll);root.mainloop()
 
 if __name__=='__main__':main()
