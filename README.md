@@ -2,6 +2,12 @@
 
 Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 
+<p align="center">
+  <img src="docs/images/20261018/twin-famicom-crt-setup.jpg" width="800" alt="ツインファミコンとFC-MAGICON、ブラウン管でのカラー映像表示、ファミリーベーシックキーボード">
+</p>
+
+ツインファミコン＋ブラウン管での実機表示。[カートリッジ・画面の接写・テスト風景を見る（写真4枚）](docs/photos_20261018.md)。
+
 - PRG・CHR を RP2350B がリアルタイムにエミュレート(マジコン。NROM/CNROM/UNROM/MMC1/MMC3 などをファームで実装)
 - NSF 再生(バンク切り替え・WRAM 対応。拡張音源は PWM で46番に混ぜる)
 - PC→FC 画面転送(PPU の読み出しに直接応答する FC-PICO 方式)
@@ -28,6 +34,14 @@ Waveshare Core2350B(RP2350B)1枚で作るファミコン用カセット。
 - 検証記録：[MMC3](docs/mmc3_sequence_validation_20261013.md)、[動画・音声](docs/remote_video_audio_validation_20261013.md)、[PVの30秒検証](docs/youtube_transfer_30s_20261013.md)。ゲームROMや動画素材は公開しない。
 - [先例を参考にした最適化](docs/reference_optimization_20261013.md)：PCのカラー変換を画素同一のまま平均26.9ms→14.8msへ短縮。ネームテーブル/CHRアドレスだけからの位置検出もエミュで確認（実機のDMA経路への接続はまだ）。同じPVを再検証済み。
 - 未書込みの実験版：[分割受信・小カーソルのUF2](firmware/out-direct-pio-diagnostic/magicon-remote-full-smallcursor-chunked.uf2)。`remote_pc.py --chunked` はこの新受信ファーム専用。従来プロトコルは引き続き使用できる。
+
+## カートリッジの外観
+
+<p align="center">
+  <img src="docs/images/20261018/fc-magicon-cartridge-front.jpg" width="720" alt="光沢ラベルを貼ったFC-MAGICONカートリッジ。Core2350B2、スイッチ、音量調整とUSBフラットケーブル">
+</p>
+
+光沢ラベルを貼ったカートリッジ。開口部からCore2350B2や各操作部へアクセスできる。[実機写真の一覧](docs/photos_20261018.md)。
 
 ## 基板と既存機能
 
