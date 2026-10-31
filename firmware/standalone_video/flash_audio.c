@@ -22,7 +22,11 @@ static int channel=-1;
 static uint32_t last_played;
 
 void flash_audio_start(const uint8_t *pcm,uint32_t samples,uint32_t rate) {
-    pcm_ring_init(&state,ring,pcm,samples);
+    flash_audio_start_encoded(pcm,samples,rate,false);
+}
+void flash_audio_start_encoded(const uint8_t *pcm,uint32_t samples,uint32_t rate,bool adpcm) {
+    if(adpcm)pcm_ring_init_adpcm(&state,ring,pcm,samples);
+    else pcm_ring_init(&state,ring,pcm,samples);
     last_played=0;
     const uint sm=2,pin=44;
     pio_sm_claim(pio2,sm);

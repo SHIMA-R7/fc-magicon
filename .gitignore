@@ -13,6 +13,11 @@ firmware/sim/**/youtube-U6Wlb18KLrI/
 *.dll
 *.exe
 *.mp4
+*.mkv
+*.mid
+*.midi
+*.fcpv
+**/apu_score.h
 *.wav
 *.npz
 *.rgb

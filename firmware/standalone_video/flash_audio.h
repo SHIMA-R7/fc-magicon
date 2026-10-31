@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 void flash_audio_start(const uint8_t *pcm,uint32_t samples,uint32_t rate);
+void flash_audio_start_encoded(const uint8_t *data,uint32_t samples,uint32_t rate,bool adpcm);
 uint32_t flash_audio_poll(void);
 uint32_t flash_audio_div256(void);
 bool flash_audio_faulted(void);

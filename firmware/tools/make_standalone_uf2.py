@@ -10,12 +10,17 @@ MEDIA=BASE+0x00800000
 LIMIT=BASE+0x01000000
 
 def main():
+    global MEDIA
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('firmware',type=Path);ap.add_argument('media',type=Path);ap.add_argument('output',type=Path)
     ap.add_argument('--picotool',type=Path,default=Path(r'C:\Users\Yugo\pico\picotool\picotool\picotool.exe'))
     ap.add_argument('--cold-boot',action='store_true',help='Mark the USB-disabled early-response firmware variant')
     ap.add_argument('--post-diagnostic-usb',action='store_true',help='USB is enabled only after a diagnostic has completed')
+    ap.add_argument('--media-offset',type=lambda x:int(x,0),default=0x800000,
+        help='Must match FC_MEDIA_OFFSET in the supplied firmware')
     a=ap.parse_args();fw=a.firmware.read_bytes();media=a.media.read_bytes()
+    assert 0<a.media_offset<0x1000000 and a.media_offset%4096==0
+    MEDIA=BASE+a.media_offset
     assert len(fw)%512==0 and len(media)>=64 and media[:4]==b'FCPV'
     mh=struct.unpack('<4s15I',media[:64]);assert mh[11]==len(media)
     assert zlib.crc32(media[64:])==mh[12] and MEDIA+len(media)<=LIMIT

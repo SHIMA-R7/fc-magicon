@@ -10,9 +10,16 @@ palette_readback='--palette-readback' in sys.argv or palette_log
 frame_readback='--frame-readback' in sys.argv or palette_readback
 readback='--readback' in sys.argv or chr_readback or frame_readback or capability
 desktop_keyboard='--desktop-keyboard' in sys.argv
+apu_stream='--apu-stream' in sys.argv
 a=Asm(0xC000)
 a.label('reset');a.sei();a.cld();a.ldx_imm(255);a.txs()
 a.lda_imm(0);a.sta(0x2000);a.sta(0x2001);a.sta(0x4010)
+if apu_stream:
+    a.sta(0x4015)
+    for reg in range(0x4000,0x4014):a.sta(reg)
+    a.lda_imm(8);a.sta(0x4001);a.sta(0x4005)
+    a.lda_imm(0x0f);a.sta(0x4015)
+    a.lda_imm(0)  # the following video-state initialization requires A=0
 for zp in (3,4,5,6,7,8,9,10):a.sta_zp(zp)
 if readback:a.sta(0x5F20)
 a.lda_imm(0x40);a.sta(0x4017)
@@ -121,7 +128,9 @@ a.lda_imm(0x93);a.sta(0x2000);a.lda_imm(0x2C);a.jmp('scroll')
 a.label('visible0');a.lda_imm(0x80);a.sta(0x2000);a.lda_imm(0x20)
 a.label('scroll');a.sta(0x2006);a.lda_imm(0);a.sta(0x2006);a.sta(0x2005);a.sta(0x2005)
 a.lda_zp(6);a.beq('inputs');a.lda_zp(4);a.sta(0x5F11)
-a.label('inputs');a.lda_imm(1);a.sta(0x4016);a.lda_imm(0);a.sta(0x4016);a.ldx_imm(8)
+a.label('inputs')
+if apu_stream:a.jsr('apu_tick')
+a.lda_imm(1);a.sta(0x4016);a.lda_imm(0);a.sta(0x4016);a.ldx_imm(8)
 a.label('pad');a.lda_abs(0x4016);a.lsr_a();a.rol_abs(0x5F00);a.dex();a.bne('pad')
 
 if desktop_keyboard:
@@ -135,6 +144,15 @@ if desktop_keyboard:
     a.sta_absy(0x5F01);a.iny();a.cpy_imm(9);a.bne('kbscan')
     a.lda_imm(0);a.sta(0x4016)
 a.inc_abs(0x5F0F);a.pla();a.tay();a.pla();a.tax();a.pla();a.rti()
+
+if apu_stream:
+    a.label('apu_tick');a.lda_abs(0x5c0e);a.and_imm(1);a.bne('apu_ready');a.rts()
+    a.label('apu_ready');a.lda_abs(0x5c0c);a.sta_zp(0x18);a.lda_abs(0x5c0d);a.sta_zp(0x19)
+    registers=(0x4000,0x4002,0x4003,0x4004,0x4006,0x4007,0x4008,0x400a,0x400b,0x400c,0x400e,0x400f)
+    for i,reg in enumerate(registers):
+        a.lda_zp(0x18 if i<8 else 0x19);a.and_imm(1<<(i%8));a.beq(f'apu_skip_{i}')
+        a.lda_abs(0x5c00+i);a.sta(reg);a.label(f'apu_skip_{i}')
+    a.lda_imm(1);a.sta(0x5f14);a.rts()
 
 if desktop_keyboard:
     a.label('kbwait');a.ldx_imm(177);a.label('kbwait_loop');a.dex();a.bne('kbwait_loop');a.rts()

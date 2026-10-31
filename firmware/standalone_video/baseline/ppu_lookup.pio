@@ -22,14 +22,24 @@ sample:
     pull block            ; discard nametable lookup result; keep bus input
     jmp start
 pattern:
-    pull block            ; DMA supplies exactly one table entry
-    jmp pin start         ; discard a late answer while remaining input
+    mov isr, x            ; preserve table base; empty PULL NOBLOCK uses X
+    mov x, null
+poll:
+    jmp pin expired       ; catch the end of this read before a later read
+    pull noblock
+    mov y, osr
+    jmp !y poll           ; bit31 marks valid replies, including unused tiles
+    mov x, isr
+    jmp pin start
     out pins, 8
     out pindirs, 8
     wait 1 pin 14
-    mov osr, null
-    out pindirs, 8
+    out pindirs, 8        ; bits16..23 of a table reply are always zero
 .wrap
+expired:
+    pull block            ; consume only this expired request; never drive
+    mov x, isr
+    jmp start
 % c-sdk {
 static inline void ppu_lookup_program_init(PIO pio,uint sm,uint offset,uint32_t table) {
     pio_sm_config c=ppu_lookup_program_get_default_config(offset);

@@ -1,10 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "ima_adpcm.h"
 #define PCM_RING_SIZE 8192u
 typedef struct {
     const uint8_t *source;
     uint32_t length,next,consumed,index;
+    bool adpcm;
+    int predictor,step_index;
 } pcm_ring_state;
 typedef struct { uint64_t last_us; bool faulted; } pcm_refill_deadline;
 static inline bool pcm_refill_on_time(pcm_refill_deadline *d,uint64_t now_us) {
@@ -13,7 +16,22 @@ static inline bool pcm_refill_on_time(pcm_refill_deadline *d,uint64_t now_us) {
     return !d->faulted;
 }
 static inline uint32_t pcm_ring_sample(pcm_ring_state *s) {
-    return s->next<s->length ? s->source[s->next++] : 128u;
+    if(s->next>=s->length)return 128u;
+    if(!s->adpcm)return s->source[s->next++];
+    unsigned offset=s->next%IMA_SAMPLES;
+    const uint8_t *b=s->source+(s->next/IMA_SAMPLES)*IMA_BYTES;
+    if(!offset) {
+        s->predictor=(int16_t)((unsigned)b[0]|((unsigned)b[1]<<8));
+        s->step_index=b[2]<=88?b[2]:88;
+    }
+    unsigned code=(b[4+offset/2]>>((offset&1)*4))&15;
+    int value=ima_decode(code,&s->predictor,&s->step_index);
+    s->next++;
+    return (unsigned)(value+32768)>>8;
+}
+static inline void pcm_ring_init_adpcm(pcm_ring_state *s,uint32_t *ring,const uint8_t *data,uint32_t length) {
+    *s=(pcm_ring_state){.source=data,.length=length,.adpcm=true};
+    for(uint32_t i=0;i<PCM_RING_SIZE;i++)ring[i]=pcm_ring_sample(s);
 }
 static inline void pcm_ring_init(pcm_ring_state *s,uint32_t *ring,const uint8_t *pcm,uint32_t length) {
     *s=(pcm_ring_state){.source=pcm,.length=length};

@@ -7,6 +7,14 @@
 #include "video_cart.h"
 #include "flash_audio.h"
 #include "fcpv.h"
+#if FC_PLAYER_APU_STREAM
+#include FC_APU_SCORE_HEADER
+_Static_assert(sizeof apu_score[0]==14, "APU record must contain 12 values and a 2-byte mask");
+_Static_assert(APU_SCORE_FRAMES>0, "APU score must not be empty");
+#endif
+#ifndef FC_MEDIA_OFFSET
+#define FC_MEDIA_OFFSET 0x00800000u
+#endif
 #if FC_REMOTE_DESKTOP
 #include "desktop_usb.h"
 #endif
@@ -172,7 +180,9 @@ int main(void) {
 #endif
     set_sys_clock_khz(250000,true);
 #if FC_PLAYER_COLD_BOOT
-    // No USB initialisation, no image conversion or whole-media CRC on this path.
+    // USB-first recovery is allowed while FC power sense is low. A real
+    // standalone cold start keeps the early-response path free of USB delays.
+    if(!gpio_get(46))stdio_init_all();
     cart_boot_prepare();
 #if FC_PLAYER_DIRECT_BOOT
     // USB-first diagnostic: populate the final PRG before CPU PIO is enabled.
@@ -213,13 +223,21 @@ int main(void) {
     // Keep the proven bus bootstrap; enable USB only after the FC driver runs.
     desktop_usb_run();
 #endif
-    const uint8_t *media=(const uint8_t *)(XIP_BASE+0x00800000u);
+    const uint8_t *media=(const uint8_t *)(XIP_BASE+FC_MEDIA_OFFSET);
     fcpv_info info;
-    if(!fcpv_parse(media,0x00800000u,&info) ||
+    if(!fcpv_parse(media,PICO_FLASH_SIZE_BYTES-FC_MEDIA_OFFSET,&info) ||
        fcpv_crc32(media+64,info.total-64)!=info.crc) {
         // Remain on the built-in screen without touching audio or bad pointers.
         stop_with_code(2);
     }
+#if FC_PLAYER_START_BUTTON
+    // The 6502 driver shifts A..Right into bits 7..0; START is bit 4.
+    // Require release first, so a button held through boot cannot auto-start.
+    while(cart_video_diag_byte(0)&0x10u)
+        if(!wait_for_vblank())stop_with_code(1);
+    while(!(cart_video_diag_byte(0)&0x10u))
+        if(!wait_for_vblank())stop_with_code(1);
+#endif
     if(!cart_video_stage(media+info.video))panic("initial frame busy");
     boot_log("FRAME_STAGED");
     uint64_t staged_at=time_us_64();
@@ -290,15 +308,44 @@ int main(void) {
     // and before the audio refill deadline begins.
     stdio_init_all();
 #endif
-    flash_audio_start(media+info.audio,info.samples,info.rate);
+#if FC_PLAYER_APU_STREAM
+    const uint64_t apu_started=time_us_64();
+    uint32_t apu_frame=UINT32_MAX;
+    bool apu_silenced=false;
+    const uint8_t silence[14]={0xb0,0,0xf8,0xb0,0,0xf8,0x80,0,0xf8,0x30,4,0xf8,0xff,0x0f};
+#else
+    flash_audio_start_encoded(media+info.audio,info.samples,info.rate,info.adpcm);
+#endif
     boot_log("AUDIO_STARTED");
     uint32_t frame=1;
 #if FC_PLAYER_AUDIO_LOG
     uint64_t next_audio_log=time_us_64()+1000000;
 #endif
     for(;;) {
+#if FC_PLAYER_APU_STREAM
+        uint64_t elapsed=time_us_64()-apu_started;
+        uint32_t played=(uint32_t)(elapsed*info.rate/1000000u);
+        uint32_t wanted=(uint32_t)(elapsed*APU_SCORE_RATE_NUM/(1000000ull*APU_SCORE_RATE_DEN));
+        if(!cart_apu_pending()) {
+            if(wanted<APU_SCORE_FRAMES && wanted!=apu_frame) {
+                uint8_t snapshot[14];
+                memcpy(snapshot,apu_score[wanted],sizeof snapshot);
+                // Preserve dirty writes across any frames skipped while the FC
+                // was still consuming the previous snapshot.
+                uint16_t mask=0;
+                uint32_t first=(apu_frame==UINT32_MAX)?0:apu_frame+1;
+                for(uint32_t f=first;f<=wanted;f++)
+                    mask|=(uint16_t)apu_score[f][12]|((uint16_t)apu_score[f][13]<<8);
+                snapshot[12]=(uint8_t)mask;snapshot[13]=(uint8_t)(mask>>8);
+                if(cart_apu_stage(snapshot))apu_frame=wanted;
+            } else if(wanted>=APU_SCORE_FRAMES && !apu_silenced) {
+                if(cart_apu_stage(silence))apu_silenced=true;
+            }
+        }
+#else
         uint32_t played=flash_audio_poll();
         if(flash_audio_faulted())stop_with_code(4);
+#endif
         if(cart_video_pending() && time_us_64()-staged_at>500000)stop_with_code(5);
         if(frame<info.frames && !cart_video_pending() && fcpv_frame_due(&info,frame,played)) {
             if(cart_video_stage(media+info.video+(size_t)frame*FCPV_FRAME)) {
@@ -309,7 +356,14 @@ int main(void) {
 #if FC_PLAYER_AUDIO_LOG
         if(time_us_64()>=next_audio_log) {
             next_audio_log=time_us_64()+1000000;
-            if(stdio_usb_connected())flash_audio_log();
+            if(stdio_usb_connected()) {
+#if FC_PLAYER_APU_STREAM
+                printf("APU frame=%lu/%u ticks=%lu pending=%u silent=%u\n",(unsigned long)apu_frame,APU_SCORE_FRAMES,(unsigned long)cart_apu_ticks(),cart_apu_pending(),apu_silenced);
+                printf("PLAY frame=%lu/%lu samples=%lu pending=%u vblank=%u\n",(unsigned long)frame,(unsigned long)info.frames,(unsigned long)played,cart_video_pending(),cart_video_vblank());
+#else
+                flash_audio_log();
+#endif
+            }
         }
 #endif
         tight_loop_contents();

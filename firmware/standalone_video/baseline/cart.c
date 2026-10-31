@@ -25,6 +25,14 @@
 #if FC_DIAG_IMAGE
 #include "static_image.h"
 #endif
+// GPIO43 is A10 through the resistor divider; JP3 supplies fixed mirroring.
+static inline unsigned chr_lookup_index(unsigned a) {
+#if FC_PLAYER_A10_GPIO43
+    return (a&0x1ffu)|((a&0x400u)>>1)|((a&0x800u)>>1)|((a&0x1000u)>>1)|((a&0x200u)<<3);
+#else
+    return a;
+#endif
+}
 #ifdef CART_HOST                        // PC の試験台(firmware/sim)でビルドする時
 #include "host_pico.h"
 #else
@@ -43,7 +51,11 @@ static void __not_in_flash_func(split_power_lost)(void);
 #include "mmc3_a12.pio.h"
 #include "rd_width.pio.h"
 #include "ppu_constant.pio.h"
-#if FC_PLAYER_A9_REMAP
+#if FC_PLAYER_A10_GPIO43
+#include "ppu_lookup_a9_39_a10_43.pio.h"
+#define ppu_lookup_program ppu_lookup_a9_39_a10_43_program
+#define ppu_lookup_program_init ppu_lookup_a9_39_a10_43_program_init
+#elif FC_PLAYER_A9_REMAP
 #include "ppu_lookup_a9_39.pio.h"
 #define ppu_lookup_program ppu_lookup_a9_39_program
 #define ppu_lookup_program_init ppu_lookup_a9_39_program_init
@@ -56,7 +68,7 @@ static void __not_in_flash_func(split_power_lost)(void);
 #if FC_DIAG_DMA_CHR || FC_REMOTE_DMA
 static uint32_t diag_chr_lookup[8192] __attribute__((aligned(32768)));
 static void diag_dma_chr_init(const uint8_t *source) {
-    if(source)for(uint a=0;a<8192;a++)diag_chr_lookup[a]=0xff00u |
+    if(source)for(uint a=0;a<8192;a++)diag_chr_lookup[chr_lookup_index(a)]=0xff00u |
 #if FC_DIAG_NROM_GAME
         source[a];
 #elif FC_DIAG_IMAGE
@@ -64,6 +76,9 @@ static void diag_dma_chr_init(const uint8_t *source) {
 #else
         (0xffu>>(a&7));
 #endif
+    // Unused converted tiles may have direction=0 and data=0. Keep those
+    // distinguishable from an empty nonblocking PIO pull without driving them.
+    for(uint a=0;a<8192;a++)diag_chr_lookup[a]|=0x80000000u;
     uint data=dma_claim_unused_channel(true), address=dma_claim_unused_channel(true);
     dma_channel_config dc=dma_channel_get_default_config(data);
     channel_config_set_transfer_data_size(&dc,DMA_SIZE_32);
@@ -83,7 +98,9 @@ static void diag_dma_chr_init(const uint8_t *source) {
 #include "cart.h"
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
 #if FC_REMOTE_FULL
-#if FC_REMOTE_DESKTOP
+#if FC_PLAYER_APU_STREAM
+#include "apu_video_driver.h"
+#elif FC_REMOTE_DESKTOP
 #include "desktop_driver.h"
 #elif FC_PLAYER_NT_STRESS
 #if FC_PLAYER_CPU_WINDOW
@@ -912,6 +929,24 @@ static uint32_t rd_full_stage[4096];
 static uint8_t rd_visible_bank;
 static uint32_t rd_palette_replies[32];
 static bool rd_initial_frame;
+#if FC_PLAYER_APU_STREAM
+static volatile uint32_t apu_replies[16];
+static volatile uint32_t apu_ticks;
+bool cart_apu_pending(void) {return (apu_replies[14]&1)!=0;}
+bool cart_apu_stage(const uint8_t data[14]) {
+    if(cart_apu_pending())return false;
+    for(unsigned i=0;i<14;i++)apu_replies[i]=0x8000ff00u|data[i];
+    __dmb();
+    apu_replies[14]=0x8000ff01u;
+    return true;
+}
+uint32_t cart_apu_ticks(void) {return apu_ticks;}
+#endif
+#if FC_PLAYER_FAST_CONTROL
+// Prebuild the complete PIO reply, as for palette reads. Computing the ready
+// bits on the read path itself still missed the real FC's M2 deadline.
+static volatile uint32_t rd_control_replies[256];
+#endif
 #define diag_chr_lookup rd_full_stage
 #include "remote_full.h"
 #undef diag_chr_lookup
@@ -948,6 +983,9 @@ static inline __attribute__((always_inline)) uint32_t remote_ppu_access(uint32_t
 
 static void __not_in_flash_func(remote_write)(uint addr, uint d) {
     stat_wr++;
+#if FC_PLAYER_APU_STREAM
+    if(addr==0x5f14){apu_replies[14]=0x8000ff00u;apu_ticks++;}
+#endif
 #if FC_REMOTE_FULL
     if(addr==0x5F11 && rd_ready && (d&1)==(rd_visible_bank^1)) {
         rd_meta_t *old=rd_meta_front;rd_meta_front=rd_meta_back;rd_meta_back=old;
@@ -955,11 +993,19 @@ static void __not_in_flash_func(remote_write)(uint addr, uint d) {
 #ifndef CART_HOST
         __dmb();
 #endif
+#if FC_PLAYER_FAST_CONTROL
+        rd_control_replies[0x10]=0x8000ff00u;
+#endif
         rd_ready=false;
     }
 #endif
-    if ((addr & 0xFF00) == 0x5F00)
+    if ((addr & 0xFF00) == 0x5F00) {
         rd_io[addr & 0xFF] = d;
+#if FC_PLAYER_FAST_CONTROL
+        // $5F10 is a read-only ready/bank register, not an ordinary mailbox.
+        if(addr!=0x5F10)rd_control_replies[addr&255]=0x8000ff00u|(d&255u);
+#endif
+    }
 }
 
 static inline __attribute__((always_inline)) uint32_t remote_cpu_access(uint32_t v) {
@@ -981,7 +1027,7 @@ static inline __attribute__((always_inline)) uint32_t remote_cpu_access(uint32_t
     if((a&0x7c00)==0x6000)return 0xff00u|rd_nt[a&1023];
 #if FC_PLAYER_CHR_READBACK
     // Independent CPU expected-data window for the visible CHR bank.
-    if((a&0x7000)==0x7000)return 0xff00u|(diag_chr_lookup[rd_visible_bank*4096+(a&4095)]&255u);
+    if((a&0x7000)==0x7000)return 0xff00u|(diag_chr_lookup[chr_lookup_index(rd_visible_bank*4096+(a&4095))]&255u);
 #endif
     if(a==0x5F10)return 0xff00u|(rd_ready?(1u|((rd_visible_bank^1u)<<1)):0u);
 #endif
@@ -1004,6 +1050,20 @@ static inline __attribute__((always_inline)) bool remote_fast_read(uint32_t h,ui
         *reply=0x8000ff00u|rd_prg[(h>>8)&0x3fffu];return true;
     }
     uint a=(h>>8)&0x7fff;
+#if FC_PLAYER_APU_STREAM
+    if((a&0x7ff0u)==0x5c00u){*reply=apu_replies[a&15];return true;}
+#endif
+#if FC_PLAYER_FAST_CONTROL
+    if((a&0x7f00u)==0x5f00u) {
+        *reply=rd_control_replies[a&255];return true;
+    }
+#endif
+#if FC_PLAYER_CHR_READBACK
+    // Expected-data reads have the same deadline as ordinary ROM reads.
+    if((a&0x7000u)==0x7000u) {
+        *reply=0x8000ff00u|(diag_chr_lookup[chr_lookup_index(rd_visible_bank*4096+(a&4095))]&255u);return true;
+    }
+#endif
     if((a&0x7fe0u)==0x5d00u) {
         *reply=rd_palette_replies[a&31];return true;
     }
@@ -1146,7 +1206,11 @@ static const char *remote_load(cart_info_t *info) {
     rd_text(rd_fb_front,15,8,"WAITING FOR PC...");
 #else
     rd_text(rd_fb_front, 12, 8, "STANDALONE VIDEO");
+#if FC_PLAYER_START_BUTTON
+    rd_text(rd_fb_front, 15, 8, "PRESS 1P START");
+#else
     rd_text(rd_fb_front, 15, 8, "LOADING VIDEO...");
+#endif
 #endif
     rd_default_meta(&rd_meta[0]);
     rd_default_meta(&rd_meta[1]);
@@ -1164,9 +1228,17 @@ static const char *remote_load(cart_info_t *info) {
 #if FC_REMOTE_DMA
     // Initial DMA table is built before enabling either bus.
     for(uint a=0;a<8192;a++)diag_chr_lookup[a]=0xff00u;
-    for(uint a=0;a<4096;a++)diag_chr_lookup[4096+a]=0xff00u|rd_spr[a];
+    for(uint a=0;a<4096;a++)diag_chr_lookup[chr_lookup_index(4096+a)]=0xff00u|rd_spr[a];
 #endif
     memset(rd_io, 0xFF, sizeof rd_io);
+#if FC_PLAYER_APU_STREAM
+    for(unsigned i=0;i<16;i++)apu_replies[i]=0x8000ff00u;
+    apu_ticks=0;
+#endif
+#if FC_PLAYER_FAST_CONTROL
+    for(uint i=0;i<256;i++)rd_control_replies[i]=0x8000ffffu;
+    rd_control_replies[0x10]=0x8000ff00u;
+#endif
     rd_io[0] = 0;
     is_remote = true;
     is_nsf = false;
@@ -1193,7 +1265,7 @@ bool cart_video_stage(const uint8_t record[5152]) {
     __dmb(); // pair with the serving core's ACK before reusing staging memory
 #endif
     uint bank=rd_visible_bank^1u;
-    for(uint i=0;i<4096;i++)diag_chr_lookup[bank*4096+i]=0xff00u|record[i];
+    for(uint i=0;i<4096;i++)diag_chr_lookup[chr_lookup_index(bank*4096+i)]=0x8000ff00u|record[i];
     memcpy(rd_nt,record+4096,1024);
     memcpy(rd_meta_back->pal,record+5120,32);
     for(uint i=0;i<32;i++)rd_palette_replies[i]=0x8000ff00u|record[5120+i];
@@ -1201,6 +1273,10 @@ bool cart_video_stage(const uint8_t record[5152]) {
     memset(rd_meta_back->oam,0xf0,256);
 #ifndef CART_HOST
     __dmb();
+#endif
+#if FC_PLAYER_FAST_CONTROL
+    // Publish only after CHR, NT and palette data have been made visible.
+    rd_control_replies[0x10]=0x8000ff00u|1u|(bank<<1);
 #endif
     rd_ready=true;
     return true;
@@ -1235,7 +1311,7 @@ void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, i
     // The last NT chunk also carries all 64 per-16x16 palette attributes.
     memcpy(rd_nt+960,attr,64);
     uint bank=rd_initial_frame?0u:(rd_visible_bank^1u);
-    memcpy(diag_chr_lookup+bank*4096,rd_full_stage,sizeof rd_full_stage);
+    for(uint i=0;i<4096;i++)diag_chr_lookup[chr_lookup_index(bank*4096+i)]=0x80000000u|rd_full_stage[i];
 #elif FC_REMOTE_DMA
     // Grayscale trial: sample 256x240 into 128x120, 240 unique tiles.
     // In-place CHR updates can tear; they cannot delay a bus response.
@@ -1247,7 +1323,7 @@ void cart_remote_commit(const uint8_t pal[32], const uint8_t attr[64], int cx, i
                 uint8_t b=rd_fb_back[(sy*32+(sx>>3))*2+p];
                 bits|=((b>>(7-(sx&7)))&1u)<<(7-x);
             }
-            diag_chr_lookup[(ty*16+tx)*16+y+p*8]=0xff00u|bits;
+            diag_chr_lookup[chr_lookup_index((ty*16+tx)*16+y+p*8)]=0xff00u|bits;
         }
     cx=64+cx/2;cy=56+cy/2;
 #endif
@@ -1492,6 +1568,14 @@ void cart_start(void) {
     gpio_set_dir(PIN_IRQ, GPIO_OUT);
     pio_set_gpio_base(pio0, 0);                              // CPU: GPIO0-31
     pio_set_gpio_base(pio1, 16);                             // PPU: GPIO16-47
+#if FC_PLAYER_A10_GPIO43
+    // Never enable mirror PIO on this input. JP1/JP2 open, JP3 closed.
+    gpio_init(43);
+    gpio_set_dir(43,GPIO_IN);
+    gpio_disable_pulls(43);
+    gpio_set_oeover(43,GPIO_OVERRIDE_LOW);
+    pio_set_gpio_base(pio2,16);
+#else
     pio_set_gpio_base(pio2, 16);                             // ミラーリング: GPIO43
     mirror_offset = pio_add_program(pio2, &mirror_program);
     mirror_program_init(pio2, 0, mirror_offset);
@@ -1499,6 +1583,7 @@ void cart_start(void) {
     int m = mir;
     mir = -1;
     set_mirror(m);                                           // reset_map で決めたミラーリングを PIO に反映
+#endif
 #if FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR
     if(!is_mmc3)rd_width_program_init(pio2,1,pio_add_program(pio2,&rd_width_program));
 #endif
