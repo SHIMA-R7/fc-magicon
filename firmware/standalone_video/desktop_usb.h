@@ -1,8 +1,34 @@
 #pragma once
 #include <string.h>
+#if !FC_REMOTE_WIFI
 #include "pico/stdio_usb.h"
+#endif
 #include "tusb.h"
 #include "audio.h"
+
+#if FC_REMOTE_WIFI
+static uint8_t desktop_cdc = UINT8_MAX;
+
+void tuh_cdc_mount_cb(uint8_t idx) { desktop_cdc = idx; }
+void tuh_cdc_umount_cb(uint8_t idx) {
+    if (idx == desktop_cdc) desktop_cdc = UINT8_MAX;
+}
+uint32_t tusb_time_millis_api(void) { return time_us_64() / 1000; }
+
+static bool desktop_connected(void) { return desktop_cdc != UINT8_MAX; }
+static uint32_t desktop_write_available(void) { return tuh_cdc_write_available(desktop_cdc); }
+static void desktop_write(const void *packet, uint32_t size) {
+    tuh_cdc_write(desktop_cdc, packet, size);
+    tuh_cdc_write_flush(desktop_cdc);
+}
+#else
+static bool desktop_connected(void) { return stdio_usb_connected(); }
+static uint32_t desktop_write_available(void) { return tud_cdc_write_available(); }
+static void desktop_write(const void *packet, uint32_t size) {
+    tud_cdc_write(packet, size);
+    tud_cdc_write_flush();
+}
+#endif
 
 static uint8_t desktop_last_input;
 bool cart_desktop_idle(void);
@@ -12,32 +38,45 @@ static uint32_t desktop_next_stats;
 static void desktop_stop(void) {audio_reset_stream();desktop_active=false;desktop_idle_pending=true;}
 static void desktop_poll(void) {
     audio_poll();
-    if(!desktop_receiving && desktop_active && (!stdio_usb_connected() || time_us_64()-desktop_last_rx>3000000))desktop_stop();
+#if FC_REMOTE_WIFI
+    tuh_task();
+#endif
+    if(!desktop_receiving && desktop_active && (!desktop_connected() || time_us_64()-desktop_last_rx>3000000))desktop_stop();
     if(!desktop_receiving && desktop_idle_pending && cart_desktop_idle())desktop_idle_pending=false;
-    if(!stdio_usb_connected())return;
+    if(!desktop_connected())return;
     uint32_t now=time_us_32();
-    if((int32_t)(now-desktop_next_stats)>=0 && tud_cdc_write_available()>=20) {
+    if((int32_t)(now-desktop_next_stats)>=0 && desktop_write_available()>=20) {
         uint32_t packet[5]={0x47444346u};audio_stats(packet+1);
-        tud_cdc_write(packet,sizeof packet);tud_cdc_write_flush();desktop_next_stats=now+1000000;
+        desktop_write(packet,sizeof packet);desktop_next_stats=now+1000000;
     }
     uint8_t io[16],packet[20]={'F','C','I','N'};
     cart_remote_io(io);
-    if(io[15]==desktop_last_input || tud_cdc_write_available()<20)return;
+    if(io[15]==desktop_last_input || desktop_write_available()<20)return;
     desktop_last_input=io[15];memcpy(packet+4,io,16);
-    tud_cdc_write(packet,20);tud_cdc_write_flush();
+    desktop_write(packet,20);
 }
 static bool desktop_read(uint8_t *p,unsigned n,unsigned timeout) {
     absolute_time_t until=make_timeout_time_ms(timeout);
     while(n) {
         desktop_poll();
         if(time_reached(until))return false;
+#if FC_REMOTE_WIFI
+        if (!desktop_connected()) return false;
+        int got = (int)tuh_cdc_read(desktop_cdc, p, n);
+#else
         int got=stdio_get_until((char *)p,n,make_timeout_time_ms(1));
+#endif
         if(got>0){p+=got;n-=got;}
     }
     return true;
 }
 static void __attribute__((noreturn)) desktop_usb_run(void) {
+#if FC_REMOTE_WIFI
+    const tusb_rhport_init_t host = {.role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_AUTO};
+    if (!tusb_rhport_init(0, &host)) panic("USB host initialization failed");
+#else
     stdio_init_all();
+#endif
     audio_init(44);
     static uint8_t meta[99],pcm[2048];
     uint32_t match=0;
@@ -55,7 +94,13 @@ static void __attribute__((noreturn)) desktop_usb_run(void) {
             audio_push(h[0],n,pcm);
         } else if(match==0x46434652u) { // FCFR
             match=0;uint8_t *back;
-            while(!(back=cart_remote_back())){desktop_poll();tight_loop_contents();}
+            absolute_time_t ready_until = make_timeout_time_ms(500);
+            while (!(back = cart_remote_back())) {
+                desktop_poll();
+                if (time_reached(ready_until)) break;
+                tight_loop_contents();
+            }
+            if (!back) continue;
             desktop_receiving=true;
             bool complete=desktop_read(back,15360,500)&&desktop_read(meta,99,500);
             desktop_receiving=false;

@@ -48,9 +48,9 @@ static void debug_report() {
   static uint32_t last;
   if (millis() - last < 1000) return;
   last = millis();
-  Serial0.printf("[%lus] wifi=%d ip=%s tcp=%d usb_conn=%d | tcp_in=%lu usb_out=%lu usb_write0=%lu usb_in=%lu\r\n",
+  Serial0.printf("[%lus] wifi=%d ip=%s tcp=%d usb_bus=%d usb_conn=%d | tcp_in=%lu usb_out=%lu usb_write0=%lu usb_in=%lu\r\n",
                  (unsigned long)(millis() / 1000), (int)WiFi.status(), WiFi.localIP().toString().c_str(),
-                 (int)(client && client.connected()), (int)(bool)Serial,
+                 (int)(client && client.connected()), (int)Serial.isPlugged(), (int)(bool)Serial,
                  (unsigned long)n_tcp_in, (unsigned long)n_usb_out, (unsigned long)n_usb_zero, (unsigned long)n_usb_in);
 }
 
