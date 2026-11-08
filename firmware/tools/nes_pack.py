@@ -78,6 +78,8 @@ def check(src, data):
 
 LIB_SPACE, LIB_MAX, ENTRY = 8 * 1024 * 1024, 127, 64
 TITLE_LEN = 28                           # メニューに出る長さ(gen_menu_driver.py)
+FDS_SIDE_SIZE = 65_500
+FDS_BIOS_SIZE = 8 * 1024
 
 
 def ascii_title(s):
@@ -144,6 +146,11 @@ def library(dst, args):
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--fds":
+        if len(sys.argv) != 5:
+            sys.exit("使い方: nes_pack.py --fds disksys.rom game.fds out.bin")
+        fds(sys.argv[2], sys.argv[3], sys.argv[4])
+        return
     src, dst = sys.argv[1], sys.argv[2]
     if src == "--library":
         library(dst, sys.argv[3:])
@@ -158,6 +165,32 @@ def main():
         sys.exit(1)
     open(dst, "wb").write(struct.pack("<4sIII", b"FCMG", len(data), sum(data) & 0xFFFFFFFF, 0) + data)
     print(f"  -> {dst} ({len(data) + 16} バイト)")
+
+
+def fds(bios_path, image_path, dst):
+    """FDS BIOS とディスク面を firmware 用の FCFD ペイロードにする。"""
+    bios = open(bios_path, "rb").read()
+    image = open(image_path, "rb").read()
+    if len(bios) != FDS_BIOS_SIZE:
+        sys.exit(f"BIOS は8KB必要です(現在 {len(bios)} バイト)")
+    if image[:4] == b"FDS\x1a":
+        if len(image) < 16:
+            sys.exit("FDS header is truncated")
+        sides = image[4]
+        disk = image[16:]
+        if not sides or len(disk) != sides * FDS_SIDE_SIZE:
+            sys.exit("FDS side count / image size mismatch")
+    else:
+        disk = image
+        if not disk or len(disk) % FDS_SIDE_SIZE:
+            sys.exit("headerless FDS image must contain whole 65,500-byte sides")
+        sides = len(disk) // FDS_SIDE_SIZE
+    if sides > 64:
+        sys.exit("too many FDS sides (maximum 64)")
+    payload = struct.pack("<4sIII", b"FCFD", 1, len(disk), sides) + bios + disk
+    outer = struct.pack("<4sIII", b"FCMG", len(payload), sum(payload) & 0xFFFFFFFF, 0)
+    open(dst, "wb").write(outer + payload)
+    print(f"FDS: {sides} sides, BIOS 8KB, disk data {len(disk) // 1024}KB -> {dst}")
 
 
 def nes(src, data):

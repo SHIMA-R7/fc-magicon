@@ -6,17 +6,30 @@
 #include "baseline/cart.h"
 #include "video_cart.h"
 #include "flash_audio.h"
+#if FC_PLAYER_NATIVE_PCM
+#include "native_pcm.h"
+#endif
+#if FC_PLAYER_FULL_TILES
+#include "pico/bootrom.h"
+#define FULL_TILES_WATCHDOG_MAGIC 0x46545744u
+#endif
 #include "fcpv.h"
 #if FC_PLAYER_APU_STREAM
 #include FC_APU_SCORE_HEADER
 _Static_assert(sizeof apu_score[0]==14, "APU record must contain 12 values and a 2-byte mask");
 _Static_assert(APU_SCORE_FRAMES>0, "APU score must not be empty");
 #endif
+#ifndef FC_FULL_TILES_MOVIE
+#define FC_FULL_TILES_MOVIE 0
+#endif
 #ifndef FC_MEDIA_OFFSET
 #define FC_MEDIA_OFFSET 0x00800000u
 #endif
 #if FC_REMOTE_DESKTOP
 #include "desktop_usb.h"
+#elif FC_REMOTE_WIFI
+#include "wifi_transport.h"
+#include "usb_update.h"
 #endif
 #if FC_PLAYER_AUDIO_LOG
 #include "pico/stdio_usb.h"
@@ -60,7 +73,11 @@ static inline void player_led_put(bool value) {
 #endif
 
 static void stop_with_code(unsigned code) {
+#if FC_PLAYER_NATIVE_PCM
+    native_pcm_stop();
+#else
     flash_audio_stop();
+#endif
     printf("PLAYER FAULT %u\n",code);
     for(;;) {
         boot_log("FAULT");
@@ -82,6 +99,16 @@ static bool wait_for_vblank(void) {
         tight_loop_contents();
     }
     return true;
+}
+static const uint8_t *player_frame(const uint8_t *media,const fcpv_info *info,uint32_t index) {
+#if FC_FULL_TILES_MOVIE
+    static uint8_t unpacked[15456];
+    if(info->packed_video) {
+        if(!fcpv_unpack_frame(media,info,index,unpacked,sizeof unpacked))stop_with_code(2);
+        return unpacked;
+    }
+#endif
+    return media+info->video+(size_t)index*info->record;
 }
 #if FC_PLAYER_NT_STRESS
 #if FC_PLAYER_ADDRESS_PROBE
@@ -159,6 +186,22 @@ static void run_nt_stress(void) {
 }
 #endif
 int main(void) {
+#if FC_PLAYER_FULL_TILES
+    // Power-loss resets clear scratch[0] in power_guard.h. A stalled trial
+    // instead returns to ROM USB recovery before enabling any external output.
+    if(watchdog_caused_reboot() && watchdog_hw->scratch[0]==FULL_TILES_WATCHDOG_MAGIC) {
+        watchdog_hw->scratch[0]=0;
+        reset_usb_boot(0,0);
+    }
+#if FC_FULL_TILES_WATCHDOG_TEST
+    // Bench-only recovery check, with the FC supply OFF. Interrupts are
+    // disabled deliberately; the independent watchdog must reach ROM USB.
+    watchdog_hw->scratch[0]=FULL_TILES_WATCHDOG_MAGIC;
+    watchdog_enable(1000,true);
+    save_and_disable_interrupts();
+    for(;;)tight_loop_contents();
+#endif
+#endif
     cart_info_t cart;
     for(uint p=0;p<=46;p++) {
         if(p==39 && !FC_PLAYER_A9_REMAP)continue;
@@ -183,6 +226,9 @@ int main(void) {
     // USB-first recovery is allowed while FC power sense is low. A real
     // standalone cold start keeps the early-response path free of USB delays.
     if(!gpio_get(46))stdio_init_all();
+#if FC_REMOTE_WIFI
+    update_completion_wait();
+#endif
     cart_boot_prepare();
 #if FC_PLAYER_DIRECT_BOOT
     // USB-first diagnostic: populate the final PRG before CPU PIO is enabled.
@@ -191,6 +237,9 @@ int main(void) {
 #endif
 #if FC_PLAYER_BOOT_LOG
     stdio_init_all(); // This diagnostic is tested with USB powered before FC ON.
+#endif
+#if FC_REMOTE_WIFI
+    desktop_update_wait();
 #endif
     boot_log("WAIT_POWER");
     fc_wait_power();fc_arm_power_guard();
@@ -208,6 +257,10 @@ int main(void) {
     if(usb_prepared)stdio_init_all(); // optional recovery while FC is off; no host wait
     fc_wait_power();fc_arm_power_guard();
 #endif
+#if FC_PLAYER_FULL_TILES
+    watchdog_hw->scratch[0]=FULL_TILES_WATCHDOG_MAGIC;
+    watchdog_enable(5000,true);
+#endif
     cart_start();
     boot_log("CART_STARTED");
 #if FC_PLAYER_NT_STRESS
@@ -219,9 +272,21 @@ int main(void) {
     // Start the built-in driver before expensive media validation; no USB waits.
     if(!wait_for_vblank())stop_with_code(1);
     boot_log("VBLANK");
+#if FC_PLAYER_FULL_TILES && !FC_FULL_TILES_MOVIE
+    stdio_init_all();
+    for(;;) {
+        watchdog_update();
+        printf("FULL_TILES static vblank=%u\n",cart_video_vblank());
+        cart_full_tiles_log();
+        sleep_ms(1000);
+    }
+#endif
 #if FC_REMOTE_DESKTOP
     // Keep the proven bus bootstrap; enable USB only after the FC driver runs.
     desktop_usb_run();
+#endif
+#if FC_REMOTE_WIFI
+    desktop_host_init();
 #endif
     const uint8_t *media=(const uint8_t *)(XIP_BASE+FC_MEDIA_OFFSET);
     fcpv_info info;
@@ -238,7 +303,8 @@ int main(void) {
     while(!(cart_video_diag_byte(0)&0x10u))
         if(!wait_for_vblank())stop_with_code(1);
 #endif
-    if(!cart_video_stage(media+info.video))panic("initial frame busy");
+    if(info.full_tiles != (bool)FC_FULL_TILES_MOVIE)stop_with_code(2);
+    if(!cart_video_stage(player_frame(media,&info,0)))panic("initial frame busy");
     boot_log("FRAME_STAGED");
     uint64_t staged_at=time_us_64();
     while(cart_video_pending()) {
@@ -260,7 +326,7 @@ int main(void) {
     }
 #if FC_PLAYER_FRAME_READBACK
         if(status!=2 || ++checked==info.frames)break;
-        if(!cart_video_stage(media+info.video+(size_t)checked*FCPV_FRAME))stop_with_code(5);
+        if(!cart_video_stage(media+info.video+(size_t)checked*info.record))stop_with_code(5);
         uint64_t next_staged=time_us_64();
         while(cart_video_pending()) {
             if(time_us_64()-next_staged>2000000)stop_with_code(5);
@@ -279,7 +345,7 @@ int main(void) {
         expected[i]=cart_video_diag_byte(0x40+i);
     }
     uint32_t result_frame=checked==info.frames?checked-1:checked;
-    const uint8_t *target=media+info.video+(size_t)result_frame*FCPV_FRAME+5120;
+    const uint8_t *target=media+info.video+(size_t)result_frame*info.record+5120;
     uint16_t nt_offset=cart_video_diag_byte(0x50)|((uint16_t)cart_video_diag_byte(0x51)<<8);
     uint16_t nt_errors=cart_video_diag_byte(0x21)|((uint16_t)cart_video_diag_byte(0x22)<<8);
     uint8_t nt_valid=cart_video_diag_byte(0x54)==1;
@@ -313,6 +379,8 @@ int main(void) {
     uint32_t apu_frame=UINT32_MAX;
     bool apu_silenced=false;
     const uint8_t silence[14]={0xb0,0,0xf8,0xb0,0,0xf8,0x80,0,0xf8,0x30,4,0xf8,0xff,0x0f};
+#elif FC_PLAYER_NATIVE_PCM
+    if(!native_pcm_start(media+info.audio,info.samples,info.rate,info.adpcm))stop_with_code(4);
 #else
     flash_audio_start_encoded(media+info.audio,info.samples,info.rate,info.adpcm);
 #endif
@@ -322,6 +390,13 @@ int main(void) {
     uint64_t next_audio_log=time_us_64()+1000000;
 #endif
     for(;;) {
+#if FC_REMOTE_WIFI
+        update_poll();
+        while (update_quiesced) update_poll();
+#endif
+#if FC_FULL_TILES_MOVIE
+        watchdog_update();
+#endif
 #if FC_PLAYER_APU_STREAM
         uint64_t elapsed=time_us_64()-apu_started;
         uint32_t played=(uint32_t)(elapsed*info.rate/1000000u);
@@ -342,13 +417,16 @@ int main(void) {
                 if(cart_apu_stage(silence))apu_silenced=true;
             }
         }
+#elif FC_PLAYER_NATIVE_PCM
+        uint32_t played=native_pcm_poll();
+        if(native_pcm_faulted())stop_with_code(4);
 #else
         uint32_t played=flash_audio_poll();
         if(flash_audio_faulted())stop_with_code(4);
 #endif
         if(cart_video_pending() && time_us_64()-staged_at>500000)stop_with_code(5);
         if(frame<info.frames && !cart_video_pending() && fcpv_frame_due(&info,frame,played)) {
-            if(cart_video_stage(media+info.video+(size_t)frame*FCPV_FRAME)) {
+            if(cart_video_stage(player_frame(media,&info,frame))) {
                 frame++;staged_at=time_us_64();player_led_put(!gpio_get(39));
             }
         }
@@ -361,7 +439,19 @@ int main(void) {
                 printf("APU frame=%lu/%u ticks=%lu pending=%u silent=%u\n",(unsigned long)apu_frame,APU_SCORE_FRAMES,(unsigned long)cart_apu_ticks(),cart_apu_pending(),apu_silenced);
                 printf("PLAY frame=%lu/%lu samples=%lu pending=%u vblank=%u\n",(unsigned long)frame,(unsigned long)info.frames,(unsigned long)played,cart_video_pending(),cart_video_vblank());
 #else
+#if FC_PLAYER_NATIVE_PCM
+                printf("NATIVE_PCM out=%lu input_played=%lu running=%u\n",(unsigned long)native_pcm_output_samples(),(unsigned long)played,native_pcm_running);
+                printf("DAC_CHECK writes=%lu errors=%lu last=%04lX\n",(unsigned long)native_pcm_dac_writes,(unsigned long)native_pcm_dac_errors,(unsigned long)native_pcm_last_error);
+                static uint32_t hashes_printed;
+                while(hashes_printed<native_pcm_hash_count) {
+                    printf("DAC_HASH n=%lu hash=%08lX\n",(unsigned long)((hashes_printed+1)*65536u),(unsigned long)native_pcm_hashes[hashes_printed]);hashes_printed++;
+                }
+#else
                 flash_audio_log();
+#endif
+#if FC_FULL_TILES_MOVIE
+                printf("PLAY full frame=%lu/%lu samples=%lu pending=%u vblank=%u\n",(unsigned long)frame,(unsigned long)info.frames,(unsigned long)played,cart_video_pending(),cart_video_vblank());
+#endif
 #endif
             }
         }

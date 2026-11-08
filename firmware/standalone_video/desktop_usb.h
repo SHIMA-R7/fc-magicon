@@ -7,20 +7,7 @@
 #include "audio.h"
 
 #if FC_REMOTE_WIFI
-static uint8_t desktop_cdc = UINT8_MAX;
-
-void tuh_cdc_mount_cb(uint8_t idx) { desktop_cdc = idx; }
-void tuh_cdc_umount_cb(uint8_t idx) {
-    if (idx == desktop_cdc) desktop_cdc = UINT8_MAX;
-}
-uint32_t tusb_time_millis_api(void) { return time_us_64() / 1000; }
-
-static bool desktop_connected(void) { return desktop_cdc != UINT8_MAX; }
-static uint32_t desktop_write_available(void) { return tuh_cdc_write_available(desktop_cdc); }
-static void desktop_write(const void *packet, uint32_t size) {
-    tuh_cdc_write(desktop_cdc, packet, size);
-    tuh_cdc_write_flush(desktop_cdc);
-}
+#include "wifi_transport.h"
 #else
 static bool desktop_connected(void) { return stdio_usb_connected(); }
 static uint32_t desktop_write_available(void) { return tud_cdc_write_available(); }
@@ -28,6 +15,10 @@ static void desktop_write(const void *packet, uint32_t size) {
     tud_cdc_write(packet, size);
     tud_cdc_write_flush();
 }
+#endif
+
+#if FC_REMOTE_WIFI
+#include "usb_update.h"
 #endif
 
 static uint8_t desktop_last_input;
@@ -72,8 +63,7 @@ static bool desktop_read(uint8_t *p,unsigned n,unsigned timeout) {
 }
 static void __attribute__((noreturn)) desktop_usb_run(void) {
 #if FC_REMOTE_WIFI
-    const tusb_rhport_init_t host = {.role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_AUTO};
-    if (!tusb_rhport_init(0, &host)) panic("USB host initialization failed");
+    desktop_host_init();
 #else
     stdio_init_all();
 #endif
@@ -84,6 +74,10 @@ static void __attribute__((noreturn)) desktop_usb_run(void) {
         uint8_t c;
         if(!desktop_read(&c,1,1))continue;
         match=(match<<8)|c;
+#if FC_REMOTE_WIFI
+        if(match==0x4643504du) {match=0;update_media();while(update_quiesced)update_poll();continue;}
+        if(match==0x46435550u) {match=0;update_receive();continue;}
+#endif
         if(match==0x46435354u) {match=0;desktop_stop();} // FCST: normal stop
         else if(match==0x46434155u) { // FCAU: PCM16, signed PCM8 or ADPCM
             uint8_t h[3];match=0;

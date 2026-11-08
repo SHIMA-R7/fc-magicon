@@ -96,6 +96,7 @@ __declspec(dllexport) unsigned deadline_check(unsigned now_us) {return pcm_refil
 
 def main():
     media_path=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'sim/standalone-video-20261014/pv-30s-4fps.fcpv'
+    a10_remap='--a10-gpio43' in sys.argv
     cold='--cold' in sys.argv
     horizontal='--horizontal' in sys.argv
     capability='--palette-capability' in sys.argv
@@ -117,12 +118,19 @@ def main():
     with tempfile.TemporaryDirectory(prefix='fc-standalone-test-',ignore_cleanup_errors=True) as d:
         folder=Path(d);(folder/'test.c').write_text(WRAPPER,encoding='utf-8')
         dll=folder/'test.dll'
-        subprocess.run([str(zig),'cc','-shared','-O2',f'-DFC_PLAYER_COLD_BOOT={int(cold)}',f'-DFC_PLAYER_READBACK={int(readback)}',f'-DFC_PLAYER_CHR_READBACK={int(chr_readback)}',f'-DFC_PLAYER_FRAME_READBACK={int(frame_readback)}',f'-DFC_PLAYER_PALETTE_READBACK={int(palette_readback)}',f'-DFC_PLAYER_PALETTE_CAPABILITY={int(capability)}',f'-DFC_PLAYER_PALETTE_LOG={int(palette_log)}',f'-DFC_PLAYER_FAST_READS={int(fast_reads)}','-I',str(SRC),'-I',str(ROOT/'sim'),
+        subprocess.run([str(zig),'cc','-shared','-O2',f'-DFC_PLAYER_A10_GPIO43={int(a10_remap)}',f'-DFC_PLAYER_COLD_BOOT={int(cold)}',f'-DFC_PLAYER_READBACK={int(readback)}',f'-DFC_PLAYER_CHR_READBACK={int(chr_readback)}',f'-DFC_PLAYER_FRAME_READBACK={int(frame_readback)}',f'-DFC_PLAYER_PALETTE_READBACK={int(palette_readback)}',f'-DFC_PLAYER_PALETTE_CAPABILITY={int(capability)}',f'-DFC_PLAYER_PALETTE_LOG={int(palette_log)}',f'-DFC_PLAYER_FAST_READS={int(fast_reads)}','-I',str(SRC),'-I',str(ROOT/'sim'),
             str(folder/'test.c'),'-o',str(dll)],check=True,timeout=120)
         lib=C.CDLL(str(dll));lib.lookup.restype=C.POINTER(C.c_uint32)
+        physical_lookup=lib.lookup
+        class LogicalLookup:
+            def __getitem__(self,a):
+                if isinstance(a,slice):return [self[i] for i in range(*a.indices(8192))]
+                index=((a&0x1ff)|((a&0x400)>>1)|((a&0x800)>>1)|((a&0x1000)>>1)|((a&0x200)<<3)) if a10_remap else a
+                return physical_lookup()[index]
+        lib.lookup=lambda:LogicalLookup()
         buf=C.create_string_buffer(data)
         assert lib.validate(buf,len(data),1)
-        for field,value in [(1,2),(2,63),(3,0xffffffff),(4,0),(4,9),(5,0),(6,0),(8,5151),
+        for field,value in [(1,3),(2,63),(3,0xffffffff),(4,0),(4,9),(5,0),(6,0),(8,5151),
                             (9,0),(10,0xffffffff),(11,len(data)+1),(13,0),(14,1),(15,1)]:
             bad=bytearray(data);struct.pack_into('<I',bad,4*field,value)
             assert not lib.validate(C.create_string_buffer(bytes(bad)),len(bad),1),(field,value)
@@ -136,8 +144,12 @@ def main():
         class Memory:
             def __init__(self):
                 self.ram=bytearray(32768);self.nt=bytearray(2048);self.pal=bytearray(32)
+                self.pad=0;self.pad_index=0
                 self.latch=0;self.addr=0;self.ctrl=0;self.acks=0;self.record=None;self.read_buffer=0xa5;self.corrupt_chr=False
             def __getitem__(self,a):
+                if a==0x4016:
+                    value=(self.pad>>(7-self.pad_index))&1 if self.pad_index<8 else 1
+                    self.pad_index+=1;return value
                 if a==0x2002:self.latch=0;return 0x80
                 if a==0x2007:
                     if 0x3f00<=self.addr<0x3f20:
@@ -158,6 +170,7 @@ def main():
                 bank=(offset>>11)&1 if horizontal else (offset>>10)&1
                 return bank*1024+(offset&1023)
             def __setitem__(self,a,v):
+                if a==0x4016:self.pad_index=0
                 if a==0x2006:
                     self.addr=((self.addr&255)|(v<<8)) if not self.latch else ((self.addr&0xff00)|v)
                     self.latch^=1
@@ -206,6 +219,14 @@ def main():
         else:raise AssertionError('driver did not enable rendering')
         main_pc=cpu.pc;budgets=[]
         assert lib.cold_active()
+        for buttons in (0,0x80,0x40,0x20,0x10,8,4,2,1,0xff,0):
+            mem.pad=buttons;cpu.nmi()
+            for _ in range(3000):
+                cpu.step()
+                if cpu.pc==main_pc:break
+            else:raise AssertionError('pad scan did not return')
+            assert lib.read_byte(0x5f00)==buttons,(buttons,lib.read_byte(0x5f00))
+        print('PASS: actual 6502 1P serial scan distinguishes all buttons; START=0x10')
         tested_count=1 if readback and not frame_readback else count
         for frame in range(tested_count):
             record=data[64+frame*record_bytes:64+(frame+1)*record_bytes]

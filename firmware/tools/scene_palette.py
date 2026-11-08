@@ -39,7 +39,7 @@ def choose_palette(images):
 def encode_fixed(image,pal,pals,previous=None,dither=0):
     a=np.asarray(image,dtype=np.int32);q=quant(a)
     options=np.array(pal[:16]).reshape(4,4)
-    distance=nf._color_distance_lut()[q][:,:,options]
+    distance=nf.COLOR_DISTANCE_LUT[q][:,:,options]
     errors=distance.min(-1).reshape(15,16,16,16,4).sum((1,3))
     # Hold the previous block choice only for a small, explicitly bounded cost.
     if previous is not None:

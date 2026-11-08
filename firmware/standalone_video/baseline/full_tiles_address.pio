@@ -1,0 +1,48 @@
+; PIO2, GPIO window 16..47. Input only: remembers the last nametable tile
+; address and ignores attributes when updating position. Speculatively starts
+; DMA before classifying A13; the output SM discards every nametable reply.
+; X = (64K-aligned table >> 6) | nametable offset.
+.program full_tiles_address
+    pull block
+    mov x, osr
+.wrap_target
+start:
+    wait 1 pin 14
+    mov isr, pins
+sample:
+    mov y, isr
+    mov isr, pins
+    jmp pin sample
+    mov isr, x
+    in y, 4
+    in null, 2
+    push block
+    mov isr, y
+    mov osr, y
+    out null, 16
+    out y, 1
+    jmp !y start
+    mov osr, ~isr
+    out null, 6
+    out y, 4
+    jmp !y start             ; low offset >= $3C0: attribute, preserve position
+    mov osr, x
+    out null, 10
+    mov y, isr
+    mov isr, osr
+    in y, 10
+    mov x, isr
+.wrap
+% c-sdk {
+static inline void full_tiles_address_init(PIO pio,uint sm,uint off,uint32_t table) {
+    pio_sm_config c=full_tiles_address_program_get_default_config(off);
+    sm_config_set_in_pins(&c,26);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_in_shift(&c,false,false,32);
+    sm_config_set_out_shift(&c,true,false,32);
+    // Keep TX enabled: the initial PULL receives the table base from ARM.
+    // Do not change GPIO function: PIO1 owns AD0..7; this SM only observes.
+    pio_sm_init(pio,sm,off,&c);
+    pio_sm_put(pio,sm,table>>6);
+}
+%}

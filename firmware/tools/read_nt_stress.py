@@ -9,16 +9,20 @@ def decode(raw):
         first_offset=u16(6),first_expected=raw[8],first_actual=raw[9],xor_mask=raw[10],
         pattern_byte=raw[11],bit_errors=[u16(12+2*i) for i in range(8)],
         ppu_base=raw[29]<<8,signature=raw[30])
-    if raw[30]==0xc5:
+    if raw[30] in (0xc5,0xd5):
         result.update(cpu_window=True,cpu_errors=raw[28]|raw[31]<<8,cpu_xor_mask=raw[11])
         del result['pattern_byte']
+    if raw[30]==0xd5:
+        del result['bit_errors']
+        result.update(cpu_page_first=list(raw[12:16]),cpu_page_middle=list(raw[16:20]),
+                      ppu_page_first=list(raw[20:24]),ppu_page_middle=list(raw[24:28]))
     return result
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--port',default='COM11');p.add_argument('--timeout',type=float,default=180)
     p.add_argument('--output',required=True,type=Path);a=p.parse_args()
-    deadline=time.monotonic()+a.timeout;port=None;buffer=bytearray();report=None;lines=[];gpio=None;gpio_line=None
+    deadline=time.monotonic()+a.timeout;port=None;buffer=bytearray();report=None;lines=[];gpio=None;gpio_line=None;address_probe=None;address_line=None
     print('Waiting for NT stress report on '+a.port,flush=True)
     while time.monotonic()<deadline:
         if port is None:
@@ -27,6 +31,10 @@ def main():
         buffer+=port.read()
         while b'\n' in buffer:
             raw,_,buffer=buffer.partition(b'\n');line=raw.decode('ascii',errors='replace').strip()
+            m=re.fullmatch(r'ALOG read=(\d+),(\d+),(\d+),(\d+) write=(\d+),(\d+),(\d+),(\d+) other=(\d+),(\d+) fdebug=([0-9a-fA-F]{8})',line)
+            if m:
+                address_probe=dict(read_pages=[int(m[i]) for i in range(1,5)],write_pages=[int(m[i]) for i in range(5,9)],read_other=int(m[9]),write_other=int(m[10]),fdebug=int(m[11],16))
+                address_line=line;continue
             m=re.fullmatch(r'GLOG samples=(\d+) high=([0-9A-F]{12}) low=([0-9A-F]{12}) changed=([0-9A-F]{12})',line)
             if m:
                 gpio=dict(samples=int(m[1]),high=int(m[2],16),low=int(m[3],16),changed=int(m[4],16))
@@ -37,6 +45,9 @@ def main():
                 report=dict(zip(('status','count','complete','protocol_errors'),map(int,m.groups())))
                 report['entries']={};lines=([gpio_line] if gpio_line else [])+[line]
                 if gpio is not None:report['gpio']=gpio
+                if address_probe is not None:
+                    report['address_probe']=address_probe
+                    lines.insert(0,address_line)
                 if report['count']:continue
             else:
                 m=re.fullmatch(r'S(\d{2}) ([0-9A-F]{64})',line)
@@ -47,7 +58,8 @@ def main():
                 report['total_errors']=sum(r['errors'] for r in report['entries'])
                 if any(r.get('cpu_window') for r in report['entries']):
                     report['cpu_errors']=sum(r.get('cpu_errors',0) for r in report['entries'])
-                report['bit_errors']=[sum(r['bit_errors'][i] for r in report['entries']) for i in range(8)]
+                if all('bit_errors' in r for r in report['entries']):
+                    report['bit_errors']=[sum(r['bit_errors'][i] for r in report['entries']) for i in range(8)]
                 a.output.parent.mkdir(parents=True,exist_ok=True)
                 a.output.write_text(json.dumps(report,indent=2),encoding='utf-8')
                 a.output.with_suffix('.log').write_text('\n'.join(lines)+'\n',encoding='utf-8')

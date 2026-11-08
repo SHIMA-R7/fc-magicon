@@ -56,6 +56,15 @@ def main():
             bad=bytearray(blob);bad[offset]=value;assert not lib.parse(bytes(bad),len(bad))
         oldaudio=bytes([128])*4000;oldbody=bytes(5152)+oldaudio;old=h.copy();old[1]=1;old[11]=64+len(oldbody);old[12]=zlib.crc32(oldbody);old[13:]=[1,0,0]
         legacy=struct.pack('<4s15I',*old)+oldbody;assert lib.parse(legacy,len(legacy))
+        fullbody=bytes(15456)+audio
+        full=h.copy();full[1]=3;full[8]=15456;full[10]=64+15456
+        full[11]=64+len(fullbody);full[12]=zlib.crc32(fullbody)
+        fullblob=struct.pack('<4s15I',*full)+fullbody
+        assert lib.parse(fullblob,len(fullblob))
+        for index,value in ((1,2),(8,5152),(10,5216),(11,len(fullblob)-1)):
+            bad=full.copy();bad[index]=value
+            assert not lib.parse(struct.pack('<4s15I',*bad)+fullbody,len(fullblob)),index
+        print('PASS full-frame v3 accepted; mixed v2/v3 record layouts rejected',flush=True)
         print('PASS v1 compatibility and malformed v2 headers/blocks rejected',flush=True)
         result=dict(c_python_bit_exact=True,ring_wrap_eof=True,legacy_v1=True,malformed_rejected=True,hardware_tested=False)
         if args.media:

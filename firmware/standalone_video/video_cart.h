@@ -3,6 +3,9 @@
 #include <stdbool.h>
 bool cart_video_stage(const uint8_t record[5152]);
 bool cart_video_pending(void);
+#if FC_PLAYER_FULL_TILES
+void cart_full_tiles_log(void);
+#endif
 uint8_t cart_video_vblank(void);
 uint8_t cart_video_readback_status(void);
 uint8_t cart_video_diag_byte(unsigned index);

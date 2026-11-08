@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image,ImageDraw,ImageFont
 import nesframe as nf
+from ima_audio import decode
 
 sys.path.insert(0,str(Path(os.environ['TEMP'])/'fc-video-deps-20261013'))
 from imageio_ffmpeg import get_ffmpeg_exe,read_frames
@@ -12,20 +13,23 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('media',type=Path);ap.add_argument('source',type=Path);ap.add_argument('output',type=Path)
     ap.add_argument('--original-frames',type=Path,help='Optional raw RGB source frames sampled for this conversion')
+    ap.add_argument('--source-url',default='')
     a=ap.parse_args();data=a.media.read_bytes();h=struct.unpack('<4s15I',data[:64])
-    assert h[0]==b'FCPV' and h[1]==1 and h[11]==len(data) and zlib.crc32(data[64:])==h[12]
+    assert h[0]==b'FCPV' and h[1] in (1,2) and h[11]==len(data) and zlib.crc32(data[64:])==h[12]
     count,fps_num,fps_den,rate,samples,record,voff,aoff=h[3:11]
-    assert record==5152 and aoff==voff+count*record and aoff+samples==len(data)
+    audio_bytes=samples if h[1]==1 else (samples+255)//256*132
+    assert record==5152 and aoff==voff+count*record and aoff+audio_bytes==len(data)
     duration=count*fps_den/fps_num
     a.output.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='fc-comparison-') as directory:
         directory=Path(directory);pcm=directory/'audio.pcm'
-        pcm.write_bytes(data[aoff:])
+        decoded=data[aoff:] if h[1]==1 else ((decode(data[aoff:],samples).astype(np.int32)+32768)>>8).astype(np.uint8).tobytes()
+        pcm.write_bytes(decoded)
         banner=Image.new('RGB',(1280,64),'black');draw=ImageDraw.Draw(banner)
         font=ImageFont.truetype(r'C:\Windows\Fonts\arial.ttf',23)
         small=ImageFont.truetype(r'C:\Windows\Fonts\arial.ttf',17)
         draw.text((24,5),'Original video (24 fps)',font=font,fill='white')
-        draw.text((664,5),f'FC 4:3 display ({fps_num/fps_den:g} fps) / PCM8 audio',font=font,fill='white')
+        draw.text((664,5),f'FC 4:3 display ({fps_num/fps_den:g} fps) / '+('IMA ADPCM' if h[1]==2 else 'PCM8'),font=font,fill='white')
         draw.text((24,37),'PC reconstruction from flash data; Twin Famicom playback is not yet verified.',font=small,fill='#bbbbbb')
         banner.save(directory/'banner.png')
         filters=(f'[0:v]tpad=stop_mode=clone:stop_duration=1,trim=duration={duration:g},fps=24,'
@@ -42,6 +46,8 @@ def main():
             '-map','[v]','-map','2:a','-t',str(duration),'-c:v','libx264','-preset','fast','-crf','18',
             '-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart',str(temporary)],stdin=subprocess.PIPE,stderr=subprocess.PIPE)
         stills=[]
+        still_indices={min(count-1,int(s*fps_num/fps_den)) for s in
+            ([duration*x for x in (.05,.25,.5,.75,.95)] if duration>120 else (5,20,45,70,90)) if s<duration}
         try:
             for k in range(count):
                 p=memoryview(data)[voff+k*record:voff+(k+1)*record]
@@ -53,7 +59,7 @@ def main():
                 idx=idx.transpose(0,2,1,3).reshape(240,256)
                 pic=np.asarray(nf.render(idx,pal,nt[960:].tobytes()))
                 process.stdin.write(pic.tobytes())
-                if k in [int(s*fps_num/fps_den) for s in (5,20,45,70,90) if s<duration]:
+                if k in still_indices:
                     stills.append((k,Image.fromarray(pic)))
             process.stdin.close()
             errors=process.stderr.read().decode(errors='replace')
@@ -76,8 +82,8 @@ def main():
     result=dict(duration_s=duration,frames=count,fps=fps_num/fps_den,resolution=[1280,544],
         display_aspect='4:3',pixel_aspect='5:4',
         left='original full-colour source at 24fps',right='FCPV CHR/NT/palette reconstruction',
-        audio='saved unsigned PCM8 transcoded to AAC',hardware_recording=False,
-        source_url='https://www.youtube.com/watch?v=U6Wlb18KLrI',bytes=a.output.stat().st_size)
+        audio=('decoded IMA ADPCM to PWM8 then AAC' if h[1]==2 else 'saved unsigned PCM8 transcoded to AAC'),hardware_recording=False,
+        source_url=a.source_url,bytes=a.output.stat().st_size)
     a.output.with_suffix('.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result,indent=2))
 

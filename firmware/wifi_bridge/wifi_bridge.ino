@@ -8,10 +8,13 @@
 // Wi-Fi の SSID とパスワードは wifi_secrets.h に書く(wifi_secrets.example.h を写して。GitHub には上げない)。
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <U8x8lib.h>
+#include <Wire.h>
 #include "esp_flash.h"
 #include "hal/spi_flash_hal.h"
 #include "hal/spimem_flash_ll.h"
 #include "wifi_secrets.h"
+#include "swd_bridge.h"
 
 // 手持ちの C6 N4 ボードはフラッシュを 80MHz で読むと化ける(パーティションテーブル 0x50AA が 0x500A / 0x502A になる、
 // Wi-Fi の初期化が ESP_ERR_NOT_FOUND で失敗する)。Arduino の C6 用ライブラリは 80MHz 固定なので、
@@ -27,6 +30,61 @@ static WiFiServer server(TCP_PORT);
 static WiFiClient client;
 static uint8_t buf[4096];
 static volatile int last_reason;        // 最後に切れた理由(Wi-Fi の reason コード。つながらない時の手がかり)
+
+static constexpr uint8_t OLED_SDA = 2;
+static constexpr uint8_t OLED_SCL = 3;
+static constexpr uint8_t OLED_ADDR = 0x3C;
+static U8X8_SH1106_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE, OLED_SCL, OLED_SDA);
+static bool oled_ready;
+
+static void init_display() {
+  Wire.begin(OLED_SDA, OLED_SCL, 100000);
+  Wire.setTimeOut(5);
+  Wire.beginTransmission(OLED_ADDR);
+  oled_ready = Wire.endTransmission() == 0;
+  Serial0.printf("OLED 0x%02X: %s\r\n", OLED_ADDR, oled_ready ? "found" : "no response");
+  if (!oled_ready) return;
+
+  oled.setI2CAddress(OLED_ADDR << 1);
+  oled.setBusClock(100000);
+  oled.begin();
+  oled.setFlipMode(1);
+  oled.setFont(u8x8_font_chroma48medium8_r);
+  oled.drawString(0, 0, "FC-MAGICON");
+}
+
+static void update_display() {
+  if (!oled_ready) return;
+  static uint32_t last;
+  if (millis() - last < 1000) return;
+  last = millis();
+
+  static bool shown;
+  static IPAddress old_ip;
+  static bool old_wifi, old_usb, old_pc;
+  const bool wifi = WiFi.status() == WL_CONNECTED;
+  const IPAddress ip = wifi ? WiFi.localIP() : IPAddress();
+  const bool usb = Serial.isPlugged();
+  const bool pc = client && client.connected();
+
+  if (!shown || wifi != old_wifi)
+    oled.drawString(0, 2, wifi ? "Wi-Fi connected " : "Wi-Fi connecting");
+  if (!shown || ip != old_ip) {
+    char line[17];
+    snprintf(line, sizeof line, "%-16s", wifi ? ip.toString().c_str() : "-");
+    oled.drawString(0, 3, line);
+  }
+  if (!shown || usb != old_usb)
+    oled.drawString(0, 5, usb ? "RP USB: OK      " : "RP USB: waiting ");
+  if (!shown || pc != old_pc)
+    oled.drawString(0, 6, pc ? "PC: connected   " : "PC: waiting     ");
+
+  shown = true;
+  old_ip = ip;
+  old_wifi = wifi;
+  old_usb = usb;
+  old_pc = pc;
+}
 
 // つながらない時に、その SSID が見えているか・電波の強さ・暗号方式を USB に出す
 static void report_scan() {
@@ -77,6 +135,7 @@ void setup() {
   Serial.setTxBufferSize(16384);
   Serial.begin(115200);                 // USB Serial/JTAG(速度の指定は意味を持たない)
   Serial.setTxTimeoutMs(20);
+  init_display();
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);                 // 省電力を切る(切らないと受信が遅れる)
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { last_reason = info.wifi_sta_disconnected.reason; },
@@ -84,12 +143,15 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   MDNS.begin("fc-magicon");             // fc-magicon.local で見つかるように
   MDNS.addService("fcbridge", "tcp", TCP_PORT);
+  swd_begin();
   server.begin();
   server.setNoDelay(true);
 }
 
 void loop() {
+  if (swd_poll()) { delay(0); return; }
   static uint32_t last_hello;
+  update_display();
   debug_report();
   if (!client || !client.connected()) {
     client = server.accept();

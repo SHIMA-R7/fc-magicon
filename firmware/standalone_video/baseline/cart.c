@@ -13,6 +13,9 @@
 //   $2002 の読み出し・$2005 の書き込みで切り替わる「2回目か」のフラグも真似する。
 #include <string.h>
 #include <stdatomic.h>
+#if FC_PLAYER_NATIVE_PCM
+#include "../native_pcm.h"
+#endif
 #if FC_PLAYER_COLD_BOOT
 #include "../early_boot.h"
 #endif
@@ -65,6 +68,112 @@ static void __not_in_flash_func(split_power_lost)(void);
 #include "hardware/dma.h"
 #include "hardware/structs/busctrl.h"
 #include "hardware/irq.h"
+#if FC_PLAYER_FULL_TILES
+#if !FC_FULL_TILES_MOVIE
+#include FC_FULL_TILE_IMAGE_HEADER
+#endif
+#include "full_tiles_address.pio.h"
+#include "full_tiles_output.pio.h"
+static uint32_t full_tiles_lookup[
+#if FC_FULL_TILES_MOVIE
+    2
+#else
+    1
+#endif
+][16384] __attribute__((aligned(65536)));
+#if FC_FULL_TILES_MOVIE
+static volatile bool full_tiles_ready;
+static uint full_tiles_front;
+static uint full_tiles_address_offset;
+#endif
+#if FC_FULL_TILES_TRACE
+static uint32_t full_tiles_trace[4096] __attribute__((aligned(16384)));
+static uint full_tiles_trace_dma;
+#endif
+static void full_tiles_init(void) {
+    for(uint tile=0;tile<1024;tile++)for(uint fine=0;fine<16;fine++) {
+        uint y=(tile/32)*8+(fine&7),column=tile&31,plane=fine>>3;
+#if FC_FULL_TILES_MOVIE
+        uint8_t value=0; // Black waiting screen; no unrelated static scene.
+#else
+        uint8_t value=y<240?full_tile_fb[(y*32+column)*2+plane]:0;
+#endif
+        full_tiles_lookup[0][tile*16+fine]=0x8000ff00u|value;
+    }
+    uint data=dma_claim_unused_channel(true),address=dma_claim_unused_channel(true);
+    #if FC_FULL_TILES_TRACE
+    full_tiles_trace_dma=dma_claim_unused_channel(true);
+    dma_channel_config tr=dma_channel_get_default_config(full_tiles_trace_dma);
+    channel_config_set_transfer_data_size(&tr,DMA_SIZE_32);
+    channel_config_set_read_increment(&tr,false);channel_config_set_write_increment(&tr,true);
+    channel_config_set_ring(&tr,true,14); // wrap WRITE address inside the trace buffer
+    dma_channel_configure(full_tiles_trace_dma,&tr,full_tiles_trace,&dma_hw->ch[data].read_addr,1,false);
+    #endif
+    dma_channel_config d=dma_channel_get_default_config(data);
+    channel_config_set_transfer_data_size(&d,DMA_SIZE_32);
+    channel_config_set_read_increment(&d,false);channel_config_set_write_increment(&d,false);
+    channel_config_set_high_priority(&d,true);
+    #if FC_FULL_TILES_TRACE
+    channel_config_set_chain_to(&d,full_tiles_trace_dma);
+    #endif
+    dma_channel_configure(data,&d,&pio1->txf[0],full_tiles_lookup,1,false);
+    dma_channel_config a=dma_channel_get_default_config(address);
+    channel_config_set_transfer_data_size(&a,DMA_SIZE_32);
+    channel_config_set_read_increment(&a,false);channel_config_set_write_increment(&a,false);
+    channel_config_set_high_priority(&a,true);
+    channel_config_set_dreq(&a,pio_get_dreq(pio2,1,false));
+    dma_channel_configure(address,&a,&dma_hw->ch[data].al3_read_addr_trig,&pio2->rxf[1],dma_encode_endless_transfer_count(),true);
+    uint address_offset=pio_add_program(pio2,&full_tiles_address_program);
+#if FC_FULL_TILES_MOVIE
+    full_tiles_address_offset=address_offset;
+#endif
+    full_tiles_address_init(pio2,1,address_offset,(uint32_t)full_tiles_lookup);
+    full_tiles_output_init(pio1,0,pio_add_program(pio1,&full_tiles_output_program));
+    pio_sm_set_enabled(pio2,1,true);
+}
+void cart_full_tiles_log(void) {
+    #if FC_FULL_TILES_TRACE
+    static bool dumped;
+    if(!dumped) {
+        dumped=true;
+        hw_clear_bits(&dma_hw->ch[full_tiles_trace_dma].ctrl_trig,DMA_CH0_CTRL_TRIG_EN_BITS);
+        __dmb();
+        uint end=((uintptr_t)dma_hw->ch[full_tiles_trace_dma].write_addr-(uintptr_t)full_tiles_trace)/4;
+        for(uint j=0;j<4096;j++) {
+            uint32_t address=full_tiles_trace[(end-4096+j)&4095];
+            if((j&15)==0)printf("FTTRACE ");
+            printf("%04lX ",(unsigned long)((address-(uintptr_t)full_tiles_lookup)>>2));
+            if((j&15)==15)printf("\n");
+        }
+    }
+    #endif
+    printf("FULLPIO deadline=%u addr_fifo=%u out_fifo=%u debug_addr=%08lX debug_out=%08lX\n",
+        (unsigned)(pio1->irq&1),pio_sm_get_rx_fifo_level(pio2,1),pio_sm_get_tx_fifo_level(pio1,0),
+        (unsigned long)pio2->fdebug,(unsigned long)pio1->fdebug);
+}
+#if FC_FULL_TILES_MOVIE
+static bool full_tiles_stage(const uint8_t *record);
+static void __not_in_flash_func(full_tiles_flip)(void) {
+    uint next=full_tiles_front^1u;
+    // Called only by the 6502 driver's explicit ACK inside VBlank, after its
+    // palette/attribute writes. No visible-line PPU reads may cross this swap.
+    pio_sm_set_enabled(pio2,1,false);
+    pio_sm_clear_fifos(pio2,1);
+    pio_sm_put(pio2,1,(uint32_t)full_tiles_lookup[next]>>6);
+    pio_sm_exec_wait_blocking(pio2,1,pio_encode_pull(false,true));
+    pio_sm_exec_wait_blocking(pio2,1,pio_encode_mov(pio_x,pio_osr));
+    pio_sm_exec(pio2,1,pio_encode_jmp(full_tiles_address_offset+full_tiles_address_wrap_target));
+    pio_sm_set_enabled(pio2,1,true);
+    full_tiles_front=next;
+    __dmb();
+    full_tiles_ready=false;
+}
+static void __not_in_flash_func(full_tiles_flip_irq)(void) {
+    pio_interrupt_clear(pio0,1);
+    if(full_tiles_ready)full_tiles_flip();
+}
+#endif
+#endif
 #if FC_DIAG_DMA_CHR || FC_REMOTE_DMA
 static uint32_t diag_chr_lookup[8192] __attribute__((aligned(32768)));
 static void diag_dma_chr_init(const uint8_t *source) {
@@ -98,7 +207,9 @@ static void diag_dma_chr_init(const uint8_t *source) {
 #include "cart.h"
 #include "chr_rom.h"                    // 試験画面の PRG(chr_test と同じもの)
 #if FC_REMOTE_FULL
-#if FC_PLAYER_APU_STREAM
+#if FC_PLAYER_FULL_TILES
+#include "full_tiles_driver.h"
+#elif FC_PLAYER_APU_STREAM
 #include "apu_video_driver.h"
 #elif FC_REMOTE_DESKTOP
 #include "desktop_driver.h"
@@ -983,6 +1094,28 @@ static inline __attribute__((always_inline)) uint32_t remote_ppu_access(uint32_t
 
 static void __not_in_flash_func(remote_write)(uint addr, uint d) {
     stat_wr++;
+#if FC_PLAYER_NATIVE_PCM
+    if(addr==0x4011 && native_pcm_running) {
+        native_pcm_dac_writes++;
+        native_pcm_dac_hash=(native_pcm_dac_hash^(d&127))*16777619u;
+        if(!(native_pcm_dac_writes&65535) && native_pcm_hash_count<32) {
+            native_pcm_hashes[native_pcm_hash_count]=native_pcm_dac_hash;
+            __dmb();native_pcm_hash_count++;
+        }
+        if((d&127)!=(native_pcm_last_reply&127)) {
+            native_pcm_dac_errors++;
+            native_pcm_last_error=((native_pcm_last_reply&127)<<8)|(d&127);
+        }
+    }
+#endif
+#if FC_FULL_TILES_MOVIE
+    if(addr==0x5f11 && full_tiles_ready) {
+        rd_control_replies[0x10]=0x8000ff00u;
+        // Core 1 must serve the very next 6502 opcode/scroll operand on time.
+        // Perform PIO bank reseeding in a core-0 IRQ instead of blocking it.
+        pio0->irq_force=1u<<1;
+    }
+#endif
 #if FC_PLAYER_APU_STREAM
     if(addr==0x5f14){apu_replies[14]=0x8000ff00u;apu_ticks++;}
 #endif
@@ -1050,6 +1183,15 @@ static inline __attribute__((always_inline)) bool remote_fast_read(uint32_t h,ui
         *reply=0x8000ff00u|rd_prg[(h>>8)&0x3fffu];return true;
     }
     uint a=(h>>8)&0x7fff;
+#if FC_PLAYER_NATIVE_PCM
+    if(a==0x5f20) {
+        if(native_pcm_running) {
+            uint32_t index=native_pcm_consumed;
+            *reply=native_pcm_replies[index&(NATIVE_PCM_RING-1)];
+        } else *reply=0x8000ff40u;
+        return true;
+    }
+#endif
 #if FC_PLAYER_APU_STREAM
     if((a&0x7ff0u)==0x5c00u){*reply=apu_replies[a&15];return true;}
 #endif
@@ -1087,7 +1229,16 @@ static void __not_in_flash_func(remote_bus_loop)(void) {
 #if FC_PLAYER_FAST_READS
             uint32_t fast_reply;
             if(remote_fast_read(header,&fast_reply)) {
-                *cpu_tx=fast_reply;continue;
+                *cpu_tx=fast_reply;
+#if FC_PLAYER_NATIVE_PCM
+                // Return audio before bookkeeping: the M2 deadline is tighter
+                // than the following internal 6502 cycles available for stores.
+                if(fast_reply&0x40000000u) {
+                    native_pcm_consumed++;
+                    native_pcm_last_reply=fast_reply&127;
+                }
+#endif
+                continue;
             }
 #endif
             uint32_t r = remote_cpu_access(header);
@@ -1240,6 +1391,15 @@ static const char *remote_load(cart_info_t *info) {
     rd_control_replies[0x10]=0x8000ff00u;
 #endif
     rd_io[0] = 0;
+#if FC_PLAYER_FULL_TILES
+    memset(rd_nt,0,sizeof rd_nt);
+#if FC_FULL_TILES_MOVIE
+    for(uint i=0;i<32;i++)rd_palette_replies[i]=0x8000ff0fu;
+#else
+    memcpy(rd_nt+960,full_tile_attr,64);
+    for(uint i=0;i<32;i++)rd_palette_replies[i]=0x8000ff00u|full_tile_pal[i];
+#endif
+#endif
     is_remote = true;
     is_nsf = false;
     is_menu = false;
@@ -1247,7 +1407,7 @@ static const char *remote_load(cart_info_t *info) {
     is_mmc3 = false;
     mir = -1;
     set_mirror(MIR_V);                                        // どれでもよい(ネームテーブルは 2 画面とも同じ並び)
-#if FC_REMOTE_DMA
+#if FC_REMOTE_DMA && !FC_PLAYER_FULL_TILES
     memcpy(rd_fb_back,rd_fb_front,RD_FB_SIZE);
     cart_remote_commit(rd_meta_front->pal,rd_meta_front->attr,0,0,false);
 #endif
@@ -1259,7 +1419,26 @@ uint8_t *cart_remote_back(void) { return rd_ready ? NULL : rd_fb_back; }
 
 // Standalone playback receives final CHR/NT/palette records, not a framebuffer.
 // Caller retains the record only during this synchronous staging copy.
+#if FC_FULL_TILES_MOVIE
+static bool full_tiles_stage(const uint8_t *record) {
+    if(full_tiles_ready)return false;
+    __dmb();
+    uint next=full_tiles_front^1u;
+    for(uint tile=0;tile<1024;tile++)for(uint fine=0;fine<16;fine++) {
+        uint y=(tile/32)*8+(fine&7),column=tile&31,plane=fine>>3;
+        full_tiles_lookup[next][tile*16+fine]=0x8000ff00u|(y<240?record[(y*32+column)*2+plane]:0u);
+    }
+    memcpy(rd_nt+960,record+15392,64);
+    for(uint i=0;i<32;i++)rd_palette_replies[i]=0x8000ff00u|record[15360+i];
+    __dmb();full_tiles_ready=true;
+    rd_control_replies[0x10]=0x8000ff01u;
+    return true;
+}
+#endif
 bool cart_video_stage(const uint8_t record[5152]) {
+#if FC_FULL_TILES_MOVIE
+    return full_tiles_stage(record);
+#else
     if(rd_ready) return false;
 #ifndef CART_HOST
     __dmb(); // pair with the serving core's ACK before reusing staging memory
@@ -1280,8 +1459,15 @@ bool cart_video_stage(const uint8_t record[5152]) {
 #endif
     rd_ready=true;
     return true;
+#endif
 }
-bool cart_video_pending(void) { return rd_ready; }
+bool cart_video_pending(void) {
+#if FC_FULL_TILES_MOVIE
+    return full_tiles_ready;
+#else
+    return rd_ready;
+#endif
+}
 uint8_t cart_video_vblank(void) { return *(volatile uint8_t *)&rd_io[15]; }
 uint8_t cart_video_readback_status(void) { return *(volatile uint8_t *)&rd_io[0x20]; }
 uint8_t cart_video_diag_byte(unsigned index) { return *(volatile uint8_t *)&rd_io[index&255u]; }
@@ -1554,6 +1740,10 @@ int cart_menu_choice(void) { return menu_choice; }
 #include "live_diag.h"
 #endif
 void cart_start(void) {
+#if FC_PLAYER_FULL_TILES
+    busctrl_hw->priority=BUSCTRL_BUS_PRIORITY_DMA_R_BITS | BUSCTRL_BUS_PRIORITY_DMA_W_BITS;
+    while(!(busctrl_hw->priority_ack&BUSCTRL_BUS_PRIORITY_ACK_BITS))tight_loop_contents();
+#endif
 #if FC_DIAG_MMC3_GAME
     // Prioritize deadline-critical CPU/PPU access over core0's CHR-table copies.
     busctrl_hw->priority=BUSCTRL_BUS_PRIORITY_PROC1_BITS |
@@ -1584,7 +1774,7 @@ void cart_start(void) {
     mir = -1;
     set_mirror(m);                                           // reset_map で決めたミラーリングを PIO に反映
 #endif
-#if FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR
+#if (FC_DIAG_SPLIT || FC_DIAG_LIVE || FC_DIAG_DIRECT_CHR) && !FC_PLAYER_FULL_TILES
     if(!is_mmc3)rd_width_program_init(pio2,1,pio_add_program(pio2,&rd_width_program));
 #endif
 #if !FC_DIAG_MMC3_NO_IRQ
@@ -1596,8 +1786,12 @@ void cart_start(void) {
 #endif
 #if FC_REMOTE_DMA
 #if !FC_PLAYER_NO_PPU
+#if FC_PLAYER_FULL_TILES
+    full_tiles_init();
+#else
     ppu_lookup_program_init(pio1,0,pio_add_program(pio1,&ppu_lookup_program),(uint32_t)diag_chr_lookup);
     diag_dma_chr_init(NULL);
+#endif
 #endif
 #elif FC_DIAG_DIRECT_CHR
 #if FC_DIAG_DMA_CHR
@@ -1631,6 +1825,13 @@ void cart_start(void) {
     }
 #endif
     __dmb();
+#if FC_FULL_TILES_MOVIE
+    pio_interrupt_clear(pio0,1);
+    irq_set_exclusive_handler(PIO0_IRQ_1,full_tiles_flip_irq);
+    irq_set_priority(PIO0_IRQ_1,PICO_HIGHEST_IRQ_PRIORITY+0x40);
+    pio_set_irq1_source_enabled(pio0,pis_interrupt1,true);
+    irq_set_enabled(PIO0_IRQ_1,true);
+#endif
 #if FC_DIAG_LIVE && !FC_DIAG_DIRECT_CHR
     live_ppu_irq_init();
 #endif

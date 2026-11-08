@@ -10,12 +10,16 @@ def main():
     assert mode in ('normal','stuck-bit','alias','cpu-normal','cpu-fault')
     cpu_window=mode.startswith('cpu-')
     settle='--settle-ppu' in sys.argv
+    stage='--stage-cpu' in sys.argv
+    samples='--samples' in sys.argv
+    assert not samples or stage
+    assert not stage or (cpu_window and settle)
     zig=next(Path(r'C:\Users\Yugo\pico\zig').rglob('zig.exe'))
     with tempfile.TemporaryDirectory(prefix='fc-nt-stress-',ignore_cleanup_errors=True) as d:
         d=Path(d);source=d/'test.c';dll=d/'test.dll'
         source.write_text(WRAPPER+'\n__declspec(dllexport) void stress_ack(unsigned s){cart_nt_stress_ack(s);}\n__declspec(dllexport) unsigned source_ready(unsigned s,unsigned p,unsigned b){return cart_nt_cpu_source(s,p,b);}\n')
         subprocess.run([str(zig),'cc','-shared','-O2','-DFC_PLAYER_NT_STRESS=1','-DFC_PLAYER_COLD_BOOT=1',
-            '-DFC_PLAYER_FAST_READS=1',f'-DFC_PLAYER_CPU_WINDOW={int(cpu_window)}',f'-DFC_PLAYER_PPU_SETTLE={int(settle)}','-I',str(SRC),'-I',str(ROOT/'sim'),str(source),'-o',str(dll)],check=True)
+            '-DFC_PLAYER_FAST_READS=1',f'-DFC_PLAYER_CPU_WINDOW={int(cpu_window)}',f'-DFC_PLAYER_PPU_SETTLE={int(settle)}',f'-DFC_PLAYER_CPU_STAGE={int(stage)}',f'-DFC_PLAYER_PAGE_SAMPLES={int(samples)}','-I',str(SRC),'-I',str(ROOT/'sim'),str(source),'-o',str(dll)],check=True)
         lib=C.CDLL(str(dll));lib.init();lib.cold_publish()
         class Memory:
             def __init__(self):
@@ -61,7 +65,7 @@ def main():
                 seq=lib.read_byte(0x5f7e)
                 if seq==len(reports)+1 and len(reports)<52:
                     r=decode(bytes(lib.read_byte(0x5f80+i) for i in range(32)))
-                    assert r['signature']==(0xc5 if cpu_window else 0xa5) and r['sequence']==seq
+                    assert r['signature']==(0xd5 if samples else 0xc5 if cpu_window else 0xa5) and r['sequence']==seq
                     reports.append(r);lib.stress_ack(seq)
                 if len(reports)==52 and lib.read_byte(0x5f20) in (2,3):break
         else:raise AssertionError('diagnostic timed out')
@@ -73,7 +77,13 @@ def main():
         for k,r in enumerate(reports):
             assert (r['pattern'],r['bank'],r['repeat'])==(k%13,(k//13)%2,k//26)
             assert r['ppu_base']==(0x2000 if r['bank']==0 else 0x2c00)
-            if clean:assert r['errors']==0 and r['first_offset']==65535 and r['xor_mask']==0 and not any(r['bit_errors'])
+            if clean:assert r['errors']==0 and r['first_offset']==65535 and r['xor_mask']==0 and not any(r.get('bit_errors',[]))
+            if samples:
+                pattern_values=[0,255,0x55,0xaa,1,2,4,8,16,32,64,128]
+                for middle in (False,True):
+                    expected=[((128 if middle else 0)^(page*0x41) if r['pattern']==12 else pattern_values[r['pattern']])^(255 if r['bank'] else 0)^(2 if mode=='cpu-fault' else 0) for page in range(4)]
+                    suffix='middle' if middle else 'first'
+                    assert r['cpu_page_'+suffix]==expected and r['ppu_page_'+suffix]==expected,(r,expected)
             if cpu_window:
                 assert r['cpu_errors']==(2048 if mode=='cpu-fault' else 0)
                 assert r['cpu_xor_mask']==(2 if mode=='cpu-fault' else 0)
@@ -89,7 +99,9 @@ def main():
         result=dict(mode=mode,rounds=52,written_bytes=mem.writes,read_bytes=mem.reads,
             total_errors=sum(r['errors'] for r in reports),steps=steps,cpu_cycles=cpu.processorCycles,hardware_verified=False)
         result.update(settle_ppu=settle,first_ppuaddr_cycle=mem.first_ppuaddr_cycle)
-        out=ROOT/'sim/standalone-video-20261014'/f'nt-stress-{mode}{"-settled" if settle else ""}-tests.json';out.write_text(json.dumps(result,indent=2))
+        result['stage_cpu']=stage
+        result['page_samples']=samples
+        out=ROOT/'sim/standalone-video-20261014'/f'nt-stress-{mode}{"-settled" if settle else ""}{"-staged" if stage else ""}{"-samples" if samples else ""}-tests.json';out.write_text(json.dumps(result,indent=2))
         print(json.dumps(result),flush=True)
         import _ctypes
         _ctypes.FreeLibrary(lib._handle)

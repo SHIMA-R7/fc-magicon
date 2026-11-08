@@ -1,0 +1,45 @@
+; PIO1, GPIO window 16..47. IN_BASE=42 (A13), JMP_PIN=40 (/RD).
+; WAIT names the physical GPIO40: SDK relocates it for the GPIO16 window.
+; Each read consumes one speculative reply. A13=1 never drives, and late
+; replies are drained while input.
+.program full_tiles_output
+.wrap_target
+start:
+    wait 0 gpio 40
+    mov osr, pins
+    out y, 1
+    jmp !y pattern
+    pull block             ; speculative nametable reply: keep bus input
+    wait 1 gpio 40
+    jmp start
+pattern:
+    mov x, null
+poll:
+    jmp pin expired
+    pull noblock
+    mov y, osr
+    jmp !y poll
+    jmp pin discard
+    out pins, 8
+    out pindirs, 8
+    wait 1 gpio 40
+    out pindirs, 8
+.wrap
+expired:
+    pull block
+discard:
+    irq nowait 0
+    jmp start
+% c-sdk {
+static inline void full_tiles_output_init(PIO pio,uint sm,uint off) {
+    pio_sm_config c=full_tiles_output_program_get_default_config(off);
+    sm_config_set_in_pins(&c,42);
+    sm_config_set_jmp_pin(&c,40);
+    sm_config_set_out_pins(&c,26,8);
+    sm_config_set_out_shift(&c,true,false,32);
+    sm_config_set_fifo_join(&c,PIO_FIFO_JOIN_TX);
+    for(uint i=26;i<34;i++)pio_gpio_init(pio,i);
+    pio_sm_set_consecutive_pindirs(pio,sm,26,8,false);
+    pio_sm_init(pio,sm,off,&c);
+}
+%}

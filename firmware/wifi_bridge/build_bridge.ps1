@@ -23,6 +23,7 @@ board_manager:
 $work = "$esp\work\wifi_bridge"
 New-Item -ItemType Directory -Force $work | Out-Null
 Copy-Item "$PSScriptRoot\wifi_bridge.ino" $work -Force
+Copy-Item "$PSScriptRoot\swd_bridge.h" $work -Force
 if (Test-Path "$PSScriptRoot\wifi_secrets.h") {
     Copy-Item "$PSScriptRoot\wifi_secrets.h" $work -Force
 } elseif ($CheckOnly) {

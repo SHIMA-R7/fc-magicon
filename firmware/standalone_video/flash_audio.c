@@ -13,6 +13,11 @@
 #include "hardware/structs/pads_bank0.h"
 #endif
 
+#if FC_PLAYER_FULL_TILES
+#define audio_pio pio1 // PIO2 holds the full-frame address tracker.
+#else
+#define audio_pio pio2
+#endif
 #define RING 8192u
 static uint32_t ring[RING] __attribute__((aligned(RING*4)));
 static pcm_ring_state state;
@@ -29,28 +34,28 @@ void flash_audio_start_encoded(const uint8_t *pcm,uint32_t samples,uint32_t rate
     else pcm_ring_init(&state,ring,pcm,samples);
     last_played=0;
     const uint sm=2,pin=44;
-    pio_sm_claim(pio2,sm);
-    uint off=pio_add_program(pio2,&audio_fifo_program);
+    pio_sm_claim(audio_pio,sm);
+    uint off=pio_add_program(audio_pio,&audio_fifo_program);
     pio_sm_config c=audio_fifo_program_get_default_config(off);
     sm_config_set_set_pins(&c,pin,1);
     sm_config_set_out_shift(&c,true,false,32);
     sm_config_set_fifo_join(&c,PIO_FIFO_JOIN_TX);
     div256=(uint32_t)(((uint64_t)clock_get_hz(clk_sys)*256+((uint64_t)rate*6206)/2)/((uint64_t)rate*6206));
     sm_config_set_clkdiv_int_frac8(&c,div256>>8,div256&255);
-    pio_gpio_init(pio2,pin);
-    pio_sm_set_consecutive_pindirs(pio2,sm,pin,1,true);
-    pio_sm_init(pio2,sm,off,&c);
-    pio_sm_put(pio2,sm,255);
+    pio_gpio_init(audio_pio,pin);
+    pio_sm_set_consecutive_pindirs(audio_pio,sm,pin,1,true);
+    pio_sm_init(audio_pio,sm,off,&c);
+    pio_sm_put(audio_pio,sm,255);
     channel=dma_claim_unused_channel(true);
     dma_channel_config d=dma_channel_get_default_config(channel);
     channel_config_set_transfer_data_size(&d,DMA_SIZE_32);
     channel_config_set_read_increment(&d,true);
     channel_config_set_write_increment(&d,false);
     channel_config_set_ring(&d,false,15);
-    channel_config_set_dreq(&d,pio_get_dreq(pio2,sm,true));
-    dma_channel_configure(channel,&d,&pio2->txf[sm],ring,dma_encode_endless_transfer_count(),true);
+    channel_config_set_dreq(&d,pio_get_dreq(audio_pio,sm,true));
+    dma_channel_configure(channel,&d,&audio_pio->txf[sm],ring,dma_encode_endless_transfer_count(),true);
     deadline=(pcm_refill_deadline){.last_us=time_us_64()};
-    pio_sm_set_enabled(pio2,sm,true);
+    pio_sm_set_enabled(audio_pio,sm,true);
 }
 uint32_t flash_audio_poll(void) {
     if(channel<0 || deadline.faulted)return last_played;
@@ -75,14 +80,14 @@ void flash_audio_log(void) {
         if(value<minimum)minimum=value;if(value>maximum)maximum=value;
         busy_wait_us_32(1);
     }
-    uint base=pio_get_gpio_base(pio2);
+    uint base=pio_get_gpio_base(audio_pio);
     printf("ALOG played=%lu source_next=%lu/%lu ring_index=%lu pcm=%u..%u pin44_high=%u/512 edges=%u func=%u ctrl=%08lX pad=%08lX status=%08lX pio_base=%u oe=%lu pc=%u fifo=%08lX debug=%08lX div256=%lu dma=%08lX\n",
         (unsigned long)last_played,(unsigned long)state.next,(unsigned long)state.length,
         (unsigned long)index,minimum,maximum,high,changes,gpio_get_function(44),
         (unsigned long)io_bank0_hw->io[44].ctrl,(unsigned long)pads_bank0_hw->io[44],
         (unsigned long)io_bank0_hw->io[44].status,base,
-        (unsigned long)((pio2->dbg_padoe>>(44-base))&1),pio_sm_get_pc(pio2,2),
-        (unsigned long)pio2->flevel,(unsigned long)pio2->fdebug,(unsigned long)div256,
+        (unsigned long)((audio_pio->dbg_padoe>>(44-base))&1),pio_sm_get_pc(audio_pio,2),
+        (unsigned long)audio_pio->flevel,(unsigned long)audio_pio->fdebug,(unsigned long)div256,
         (unsigned long)dma_hw->ch[channel].read_addr);
 }
 #endif
@@ -91,8 +96,8 @@ void flash_audio_stop(void) {
     // Stop fetching stale samples. Keep mid-level PWM, rather than DC low.
     dma_channel_abort((uint)channel);
     // Software stop can discard the ring, but must not drive another bus pin.
-    pio_sm_set_enabled(pio2,2,false);
-    pio_sm_clear_fifos(pio2,2);
+    pio_sm_set_enabled(audio_pio,2,false);
+    pio_sm_clear_fifos(audio_pio,2);
     // The power guard's OE override, if asserted, remains authoritative.
     gpio_set_function(44,GPIO_FUNC_PWM);
     uint slice=pwm_gpio_to_slice_num(44);
