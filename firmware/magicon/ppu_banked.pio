@@ -1,0 +1,54 @@
+; Banked CHR through DMA pointer indirection. X = aligned chr_map address >> 5.
+; Send byte offset, then the address of one of eight CHR bank pointers.
+; DMA adds pointer + offset and returns one byte. No mapper copies are required.
+.program ppu_banked
+    pull block
+    mov x, osr
+.wrap_target
+start:
+    wait 1 pin 14
+    mov isr, pins
+sample:
+    mov y, isr
+    mov isr, pins
+    jmp pin sample
+    mov isr, y
+    mov osr, y
+    out null, 16
+    out y, 1
+    jmp !y pattern
+    jmp start
+pattern:
+    mov y, isr
+    mov osr, y
+    out isr, 10
+    push block
+    mov osr, y
+    out null, 10
+    out y, 3
+    mov isr, x
+    in y, 3
+    in null, 2
+    push block
+    pull block
+    jmp pin start
+    out pins, 8
+    mov osr, ~null
+    out pindirs, 8
+    wait 1 pin 14
+    mov osr, null
+    out pindirs, 8
+.wrap
+% c-sdk {
+static inline void ppu_banked_program_init(PIO pio,uint sm,uint offset,uint32_t bank_table) {
+    pio_sm_config c=ppu_banked_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,26);sm_config_set_jmp_pin(&c,40);
+    sm_config_set_out_pins(&c,26,8);
+    sm_config_set_in_shift(&c,false,false,32);
+    sm_config_set_out_shift(&c,true,false,32);
+    for(uint p=26;p<34;p++)pio_gpio_init(pio,p);
+    pio_sm_set_consecutive_pindirs(pio,sm,26,8,false);
+    pio_sm_init(pio,sm,offset,&c);
+    pio_sm_put(pio,sm,bank_table>>5);
+}
+%}

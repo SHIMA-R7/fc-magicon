@@ -1,0 +1,57 @@
+; Speculative PRG fetch during M2 low; /ROMSEL gates every actual ROM drive.
+; X=source>>13, Y=slot. Command FIFO is sampled once near the start of low.
+.program cpu_rom_dma
+.wrap_target
+public start:
+    wait 0 gpio 25 [31]
+    pull noblock [1]
+    mov x, osr
+    mov isr, x
+    mov osr, pins
+    out x, 2
+    jmp x!=y skip
+    out null, 1
+    out x, 1
+    jmp !x skip
+    mov x, isr
+    mov osr, pins
+    out null, 19
+    in osr, 13
+    push block
+    wait 1 gpio 25 [9]
+    pull block
+    jmp pin discard
+public valid:
+    out pins, 8
+    mov osr, ~null
+    out pindirs, 8
+    wait 0 gpio 25
+    mov osr, null
+    out pindirs, 8
+.wrap
+public discard:
+    jmp start
+skip:
+    mov x, isr
+    wait 1 gpio 25
+    jmp start
+public wram_reply:
+    pull block
+    jmp pin valid
+    jmp start
+% c-sdk {
+static inline void cpu_rom_dma_program_init(PIO pio,uint sm,uint offset,uint32_t source) {
+    pio_sm_config c=cpu_rom_dma_program_get_default_config(offset);
+    sm_config_set_in_pins(&c,21);sm_config_set_jmp_pin(&c,23);
+    sm_config_set_out_pins(&c,0,8);
+    sm_config_set_in_shift(&c,false,false,32);
+    sm_config_set_out_shift(&c,true,false,32);
+    for(uint p=0;p<8;p++)pio_gpio_init(pio,p);
+    pio_sm_set_consecutive_pindirs(pio,sm,0,8,false);
+    pio_sm_init(pio,sm,offset,&c);
+    pio_sm_put(pio,sm,source>>13);
+    pio_sm_exec(pio,sm,pio_encode_pull(false,true));
+    pio_sm_exec(pio,sm,pio_encode_mov(pio_x,pio_osr));
+    pio_sm_exec(pio,sm,pio_encode_set(pio_y,sm));
+}
+%}

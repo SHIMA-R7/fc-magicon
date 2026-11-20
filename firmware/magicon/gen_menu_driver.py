@@ -28,6 +28,7 @@ STUB = 0x0300
 LOGO_TILE0, LOGO_W, LOGO_H, ROW_LOGO, COL_LOGO = 0x80, 17, 2, 2, 7   # nsf_driver.h の CHR のロゴ(gen_nsf_driver.py と同じ)
 # ゼロページ
 CUR, TOP, PAD, PREV, NEW, NMIF, HOLD, OLDCUR, PTR, TMP, AHI, ALO, CNT, ROWN = (0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14)
+ARMED = 15
 UP, DOWN, LEFT, RIGHT, A_START = 0x08, 0x04, 0x02, 0x01, 0x90
 
 # ---------------- 始める時に本体 RAM で動く部分($0300) ----------------
@@ -62,16 +63,23 @@ for page in range(4):
     a.ldx_imm(0)
     a.label(f"nt{page}"); a.lda_absx(NT_TPL + page * 0x100); a.sta(0x2007); a.inx(); a.bne(f"nt{page}")
 a.lda_abs(COUNT); a.sta_zp(CNT)
-a.lda_imm(0); a.sta_zp(CUR); a.sta_zp(TOP); a.sta_zp(PREV); a.sta_zp(HOLD)
+a.lda_imm(0); a.sta_zp(CUR); a.sta_zp(TOP); a.sta_zp(PREV); a.sta_zp(HOLD); a.sta_zp(ARMED)
 a.jsr("draw_page"); a.jsr("show")
 
 a.label("main")
 a.lda_imm(0); a.sta_zp(NMIF)
 a.label("wait"); a.lda_zp(NMIF); a.beq("wait")      # VBlank の始め(NMI)まで待つ
+a.lda_abs(0x5FF3); a.cmp_abs(CNT); a.bcs("no_pc_pick")
+a.sta_zp(CUR); a.jmp("launch")                    # same RAM handoff for bench requests
+a.label("no_pc_pick")
 # パッド(1コンと、拡張端子のコントローラーの両方): bit7 = A … bit0 = →
 a.lda_imm(1); a.sta(0x4016); a.lda_imm(0); a.sta(0x4016)
 a.ldx_imm(8)
 a.label("pad"); a.lda_abs(0x4016); a.and_imm(3); a.cmp_imm(1); a.rol_abs(PAD); a.dex(); a.bne("pad")
+a.lda_zp(PAD); a.sta(0x5FF1)                       # diagnostic observation only
+a.and_imm(A_START); a.bne("arm_done")
+a.lda_imm(1); a.sta_zp(ARMED)                       # require release before launch
+a.label("arm_done")
 a.lda_zp(PREV); a.eor_imm(0xFF); a.and_zp(PAD); a.sta_zp(NEW)
 a.lda_zp(PAD); a.sta_zp(PREV)
 # 上下を押し続けたら、24 フレーム後から 4 フレームごとに動く
@@ -96,6 +104,7 @@ a.lda_zp(NEW); a.and_imm(LEFT); a.beq("not_left")                # 前のペー�
 a.lda_zp(CUR); a.sec(); a.sbc_imm(ROWS); a.bcs("set_l"); a.lda_imm(0)
 a.label("set_l"); a.sta_zp(CUR)
 a.label("not_left")
+a.lda_zp(ARMED); a.beq("no_go")
 a.lda_zp(NEW); a.and_imm(A_START); a.beq("no_go"); a.jmp("launch")
 a.label("no_go")
 # 見えている範囲を合わせる(外れたら描き直す)

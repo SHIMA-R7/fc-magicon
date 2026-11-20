@@ -89,8 +89,9 @@ def ascii_title(s):
 
 def library(dst, args):
     add_remote = "--add-remote" in args
+    strict = "--strict" in args
     paths = []
-    for p in (a for a in args if a != "--add-remote"):
+    for p in (a for a in args if a not in ("--add-remote", "--strict")):
         if os.path.isdir(p):
             paths += sorted(os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith((".nes", ".nsf")))
         else:
@@ -122,6 +123,8 @@ def library(dst, args):
         items.append(("REMOTE DESKTOP", b"FCRD"))
     if not items:
         sys.exit("入れられる ROM が 1 本も無い")
+    if strict and skipped:
+        sys.exit("Library not written: unsupported inputs: " + ", ".join(skipped))
     if len(items) > LIB_MAX:
         sys.exit(f"{len(items)} 本は多過ぎる({LIB_MAX} 本まで)")
     head = bytearray(16 + ENTRY * len(items))
@@ -146,6 +149,12 @@ def library(dst, args):
 
 
 def main():
+    global ROM_MAX
+    if "--extended" in sys.argv:
+        # Match the explicit FC_GAME_LIBRARY firmware profile; stock firmware
+        # retains its SRAM-only limit. This does not validate hardware timing.
+        sys.argv.remove("--extended")
+        ROM_MAX = 1024 * 1024
     if len(sys.argv) >= 2 and sys.argv[1] == "--fds":
         if len(sys.argv) != 5:
             sys.exit("使い方: nes_pack.py --fds disksys.rom game.fds out.bin")
@@ -225,7 +234,10 @@ def nes(src, data):
         print("  ! このマッパーはまだ対応していない")
         ok = False
     if prg + chr_ > ROM_MAX:
-        print(f"  ! PRG + CHR が {ROM_MAX // 1024}KB を超える(SRAM に入らない)")
+        print(f"  ! PRG + CHR exceeds this firmware profile ({ROM_MAX // 1024}KB)")
+        ok = False
+    if prg + chr_ > 384 * 1024 and chr_ > 384 * 1024:
+        print("  ! extended profile requires CHR ROM to fit internal SRAM")
         ok = False
     if data[6] & 2:
         print("  (バッテリーバックアップのセーブは、まだ電源を切ると消える)")

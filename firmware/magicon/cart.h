@@ -2,8 +2,18 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#ifndef FC_GAME_PROVEN_MMC3
+#define FC_GAME_PROVEN_MMC3 0
+#endif
+#ifndef FC_GAME_PRG_SRAM
+#define FC_GAME_PRG_SRAM 0
+#endif
 
-#define ROM_MAX (384u * 1024u)          // PRG + CHR(ROM)の合計。RP2350 の SRAM に置く
+#if FC_GAME_COPY_RAM
+#define ROM_MAX (256u * 1024u)          // Leave SRAM for all firmware code/rodata.
+#else
+#define ROM_MAX (384u * 1024u)
+#endif
 
 typedef struct {
     int mapper;
@@ -12,6 +22,7 @@ typedef struct {
     bool battery;
     bool is_remote;                     // 画面転送(リモートデスクトップ)モード
     bool is_menu;                       // ゲーム選択メニュー
+    bool is_fds;                        // Famicom Disk System image
     // NSF の時
     bool is_nsf, nsf_banked;
     uint8_t nsf_songs, nsf_start, nsf_exp;          // nsf_exp = 拡張音源のビット(まだ鳴らさない)
@@ -21,6 +32,10 @@ typedef struct {
 
 // iNES / NES 2.0 または NSF("NESM")を読み込む。失敗したらエラーの文字列、成功したら NULL
 const char *cart_load(const uint8_t *ines, uint32_t len, cart_info_t *info);
+#if CART_EXTENDED_ROM
+// Detached-board storage check; does not enable any FC bus output.
+bool cart_storage_selftest(void);
+#endif
 
 // ---- ライブラリ(フラッシュの ROM 置き場に複数の ROM。tools/nes_pack.py --library が作る) ----
 //   "FCLB" + 項目の数 + 全体の長さ + 予備 の後ろに項目(64 バイト)が並び、中身は置き場の先頭からの位置に置く。
@@ -33,6 +48,8 @@ typedef struct { char name[48]; uint32_t offset, len, sum, reserved; } lib_entry
 void cart_load_menu(const lib_entry_t *entries, int count, cart_info_t *info);
 // メニューで選ばれた番号(まだなら -1)。本体側が $5FF0 に書く
 int cart_menu_choice(void);
+void cart_request_menu_pick(unsigned pick);
+void cart_log_storage_timing(void);
 unsigned cart_nsf_audio(int16_t *out,unsigned count);
 uint32_t cart_nsf_audio_fault(void);
 // ROM が無い時の試験画面(chr_test と同じ: 4色の縦縞 + 8ドットごとの格子、音)

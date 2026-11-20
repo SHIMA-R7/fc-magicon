@@ -16,12 +16,24 @@
 #include "hardware/vreg.h"
 #include "hardware/structs/sio.h"
 #include "hardware/watchdog.h"
+#include "pico/bootrom.h"
 #include "cart.h"
+#ifndef FC_GAME_LIBRARY
+#define FC_GAME_LIBRARY 0
+#endif
+#if CART_EXTENDED_ROM
+#include "hardware/psram.h"
+#endif
 extern volatile uint32_t diag_first_cpu, diag_marks, diag_mark_errors, diag_service_max, diag_service_count;
 extern volatile uint32_t diag_last_cpu_header;
 extern volatile uint32_t diag_error_count, diag_errors[8][5];
 extern volatile uint32_t diag_trace_count, diag_trace_mark, diag_trace[16][2];
 extern volatile uint32_t diag_ppu_service_max, diag_ppu_service_count;
+#if FC_GAME_BUS_TRACE
+void cart_log_game_bus(void);
+void cart_rearm_game_trace(void);
+void cart_request_menu_pick(unsigned pick);
+#endif
 #include "audio.h"
 #include "remote_chunk.h"
 #if MAGICON_USB_HOST
@@ -38,6 +50,7 @@ extern volatile uint32_t diag_ppu_service_max, diag_ppu_service_count;
 #define PIN_FC_5V      46
 #define BUS_PIN_LAST   42
 #define ROM_SLOT       0x00800000u      // フラッシュ先頭から 8MB(ファームウェアとは重ならない)
+#define LIBRARY_LOAD_GUARD 0x4c494252u
 
 typedef struct {
     char magic[4];                      // "FCMG"
@@ -85,11 +98,13 @@ static const char *load_library(cart_info_t *info) {
     const lib_entry_t *e = (const lib_entry_t *)(lh + 1);
     if (lh->count == 0 || lh->count > LIB_MAX_ITEMS)
         return "bad library header";
+    if (lh->total > LIB_SPACE || lh->total < sizeof(*lh) + lh->count * sizeof(*e))
+        return "bad library length";
     uint32_t pick = watchdog_hw->scratch[0];
     watchdog_hw->scratch[0] = 0;
     if ((pick & 0xFFFF0000u) == PICK_MAGIC && (pick & 0xFFFF) < lh->count)
         return load_entry(&e[pick & 0xFFFF], info);
-    if (lh->count == 1)
+    if (lh->count == 1 && !FC_GAME_LIBRARY)
         return load_entry(&e[0], info);
     cart_load_menu(e, (int)lh->count, info);
     return NULL;
@@ -102,7 +117,7 @@ static const char *load_from_flash(cart_info_t *info) {
         return load_library(info);
     if (memcmp(h->magic, "FCMG", 4) != 0)
         return "no ROM in flash (write one with load_rom.ps1)";
-    if (h->len < 4 || h->len > 4u * 1024 * 1024)        // 4 = 画面転送モードの印 "FCRD"
+    if (h->len < 4 || h->len > LIB_SPACE - sizeof(slot_header_t)) // 4 = 画面転送モードの印 "FCRD"
         return "bad length in flash header";
     uint32_t sum = 0;
     for (uint32_t i = 0; i < h->len; i++)
@@ -258,12 +273,57 @@ static void __attribute__((noreturn)) remote_loop(void) {
 int main(void) {
     uint64_t boot_us = time_us_64();
     bus_pins_input();
+#if FC_GAME_LIBRARY
+    if(watchdog_caused_reboot() && watchdog_hw->scratch[7]==LIBRARY_LOAD_GUARD) {
+        watchdog_hw->scratch[7]=0;
+        watchdog_hw->scratch[0]=0;
+        reset_usb_boot(0,0);
+    }
+    watchdog_hw->scratch[7]=LIBRARY_LOAD_GUARD;
+    watchdog_enable(4000,true);
+#endif
     gpio_init(PIN_LED);
     gpio_set_dir(PIN_LED, GPIO_OUT);
 
     vreg_set_voltage(VREG_VOLTAGE_1_20);
     sleep_ms(10);
     set_sys_clock_khz(250000, true);
+#if CART_EXTENDED_ROM
+    // Runtime initializes CS47 at the original clock. Recalculate QMI timing
+    // before accessing PSRAM at 250 MHz; core1 and FC bus service are still off.
+#if FC_GAME_PROVEN_MMC3
+    // Keep PSRAM startup inside the watchdog-protected part of main.
+    extern void runtime_init_setup_psram(void);
+    const slot_header_t *slot=(const slot_header_t *)(XIP_BASE+ROM_SLOT);
+    uint32_t selected_length=slot->len;
+    if(!memcmp(slot->magic,"FCLB",4)) {
+        const lib_header_t *lib=(const lib_header_t *)slot;
+        uint32_t pick=watchdog_hw->scratch[0];
+        selected_length=0;
+        if((pick&0xffff0000u)==PICK_MAGIC && (pick&0xffff)<lib->count && lib->count<=LIB_MAX_ITEMS)
+            selected_length=((const lib_entry_t *)(lib+1))[pick&0xffff].len;
+    }
+    bool need_psram=selected_length>ROM_MAX+16;
+    if(need_psram)runtime_init_setup_psram();
+#endif
+    if (psram_is_available()
+#if FC_GAME_PROVEN_MMC3
+        && need_psram
+#endif
+        ) {
+        uint32_t irq_state = save_and_disable_interrupts();
+        if (psram_configure_params(133000000, 8000, 18) == PICO_OK)
+            psram_reinitialize();
+        restore_interrupts(irq_state);
+    }
+    // A cold FC boot must not wait for a multi-megabyte memory test.
+    bool storage_tested = !gpio_get(PIN_FC_5V)
+#if FC_GAME_PROVEN_MMC3
+        && need_psram
+#endif
+        ;
+    bool storage_ok = storage_tested && cart_storage_selftest();
+#endif
 
     // 本体がリセットを解く前にバスへ出られるよう、ROM の読み込みは 5V を待つ前に済ませる
     cart_info_t info;
@@ -274,12 +334,41 @@ int main(void) {
 #endif
     if (err)
         cart_load_fallback(&info);
+#if FC_GAME_LIBRARY
+    watchdog_disable();
+    watchdog_hw->scratch[7]=0;
+#endif
     uint64_t prepared_us = time_us_64();
 #if !MAGICON_USB_HOST
     // Keep standalone USB/picotool available while waiting for FC power.
     // A cold start with FC already on prioritizes bus service instead.
-    bool usb_prepared = !gpio_get(PIN_FC_5V);
+    bool usb_prepared = !gpio_get(PIN_FC_5V) || FC_GAME_PROVEN_MMC3;
     if (usb_prepared) stdio_init_all();
+#if FC_GAME_PROVEN_MMC3
+    if(usb_prepared)cart_log_storage_timing();
+#endif
+#endif
+
+#if FC_GAME_LIBRARY && !MAGICON_USB_HOST
+    uint64_t next_status = 0;
+    while (!gpio_get(PIN_FC_5V)) {
+#if FC_GAME_PROVEN_MMC3
+        int offline_pick=getchar_timeout_us(0);
+        if(offline_pick>='0' && offline_pick<='9')reboot_with_pick(PICK_MAGIC|(offline_pick-'0'));
+        else if(offline_pick>='a' && offline_pick<='d')reboot_with_pick(PICK_MAGIC|(offline_pick-'a'+10));
+#endif
+        if (time_us_64() >= next_status) {
+            printf("GAME LIBRARY: PSRAM=%lu bytes storage_test=%s boot=%s\n",
+                (unsigned long)psram_get_size(),
+                !storage_tested ? "not run" : storage_ok ? "PASS" : "FAIL",
+                err ? err : info.is_menu ? "MENU" : "GAME");
+#if FC_GAME_PROVEN_MMC3
+            cart_log_storage_timing();
+#endif
+            next_status = time_us_64() + 1000000;
+        }
+        sleep_ms(1);
+    }
 #endif
 
 #if FC_DIAG_SPLIT
@@ -337,6 +426,15 @@ int main(void) {
     for (;;) {
         for (int i = 0; i < 1000; i++) {
             usb_poll();
+#if (FC_GAME_BUS_TRACE || FC_GAME_PROVEN_MMC3) && !MAGICON_USB_HOST
+            int command=getchar_timeout_us(0);
+#if FC_GAME_BUS_TRACE
+            if(command=='T')cart_rearm_game_trace();
+            else
+#endif
+            if(command>='0' && command<='9')cart_request_menu_pick(command-'0');
+            else if(command>='a' && command<='d')cart_request_menu_pick(command-'a'+10);
+#endif
             if (info.is_menu && cart_menu_choice() >= 0)
                 reboot_with_pick(PICK_MAGIC | (uint32_t)cart_menu_choice());   // 選ばれた ROM で起動し直す
             sleep_ms(1);
@@ -357,6 +455,9 @@ int main(void) {
                    info.vertical ? "V" : "H", info.battery ? " battery" : "");
         printf("cpu %lu/s  ppu %lu/s  writes %lu/s\n", (unsigned long)(c - lc), (unsigned long)(p - lp),
                (unsigned long)(w - lw));
+#if FC_GAME_BUS_TRACE
+        cart_log_game_bus();
+#endif
 #if FC_DIAGNOSTIC && !MAGICON_USB_HOST
         printf("diag: cpu_pc=%lu ppu_pc=%lu cpu_fifo=%08lx ppu_fifo=%08lx sense=%d M2=%d RD=%d\n",
             (unsigned long)pio_sm_get_pc(pio0,0), (unsigned long)pio_sm_get_pc(pio1,0),

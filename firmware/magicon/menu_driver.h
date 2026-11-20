@@ -64,7 +64,7 @@
 //   $C029: 8D 06 20                 STA $2006
 //   $C02C: A2 00                    LDX #$00
 // pal:
-//   $C02E: BD 2B C2                 LDA paltab,X
+//   $C02E: BD 4B C2                 LDA paltab,X
 //   $C031: 8D 07 20                 STA $2007
 //   $C034: E8                       INX
 //   $C035: E0 20                    CPX #$20
@@ -104,281 +104,299 @@
 //   $C078: 85 01                    STA $01
 //   $C07A: 85 03                    STA $03
 //   $C07C: 85 06                    STA $06
-//   $C07E: 20 A9 C1                 JSR draw_page
-//   $C081: 20 FF C1                 JSR show
+//   $C07E: 85 0F                    STA $0F
+//   $C080: 20 C9 C1                 JSR draw_page
+//   $C083: 20 1F C2                 JSR show
 // main:
-//   $C084: A9 00                    LDA #$00
-//   $C086: 85 05                    STA $05
+//   $C086: A9 00                    LDA #$00
+//   $C088: 85 05                    STA $05
 // wait:
-//   $C088: A5 05                    LDA $05
-//   $C08A: F0 FC                    BEQ wait
-//   $C08C: A9 01                    LDA #$01
-//   $C08E: 8D 16 40                 STA $4016
-//   $C091: A9 00                    LDA #$00
-//   $C093: 8D 16 40                 STA $4016
-//   $C096: A2 08                    LDX #$08
+//   $C08A: A5 05                    LDA $05
+//   $C08C: F0 FC                    BEQ wait
+//   $C08E: AD F3 5F                 LDA $5FF3
+//   $C091: CD 0D 00                 CMP $000D
+//   $C094: B0 05                    BCS no_pc_pick
+//   $C096: 85 00                    STA $00
+//   $C098: 4C 37 C2                 JMP launch
+// no_pc_pick:
+//   $C09B: A9 01                    LDA #$01
+//   $C09D: 8D 16 40                 STA $4016
+//   $C0A0: A9 00                    LDA #$00
+//   $C0A2: 8D 16 40                 STA $4016
+//   $C0A5: A2 08                    LDX #$08
 // pad:
-//   $C098: AD 16 40                 LDA $4016
-//   $C09B: 29 03                    AND #$03
-//   $C09D: C9 01                    CMP #$01
-//   $C09F: 2E 02 00                 ROL $0002
-//   $C0A2: CA                       DEX
-//   $C0A3: D0 F3                    BNE pad
-//   $C0A5: A5 03                    LDA $03
-//   $C0A7: 49 FF                    EOR #$FF
-//   $C0A9: 25 02                    AND $02
-//   $C0AB: 85 04                    STA $04
-//   $C0AD: A5 02                    LDA $02
-//   $C0AF: 85 03                    STA $03
-//   $C0B1: A5 02                    LDA $02
-//   $C0B3: 29 0C                    AND #$0C
-//   $C0B5: D0 07                    BNE held
-//   $C0B7: A9 00                    LDA #$00
-//   $C0B9: 85 06                    STA $06
-//   $C0BB: 4C D2 C0                 JMP dirs
+//   $C0A7: AD 16 40                 LDA $4016
+//   $C0AA: 29 03                    AND #$03
+//   $C0AC: C9 01                    CMP #$01
+//   $C0AE: 2E 02 00                 ROL $0002
+//   $C0B1: CA                       DEX
+//   $C0B2: D0 F3                    BNE pad
+//   $C0B4: A5 02                    LDA $02
+//   $C0B6: 8D F1 5F                 STA $5FF1
+//   $C0B9: 29 90                    AND #$90
+//   $C0BB: D0 04                    BNE arm_done
+//   $C0BD: A9 01                    LDA #$01
+//   $C0BF: 85 0F                    STA $0F
+// arm_done:
+//   $C0C1: A5 03                    LDA $03
+//   $C0C3: 49 FF                    EOR #$FF
+//   $C0C5: 25 02                    AND $02
+//   $C0C7: 85 04                    STA $04
+//   $C0C9: A5 02                    LDA $02
+//   $C0CB: 85 03                    STA $03
+//   $C0CD: A5 02                    LDA $02
+//   $C0CF: 29 0C                    AND #$0C
+//   $C0D1: D0 07                    BNE held
+//   $C0D3: A9 00                    LDA #$00
+//   $C0D5: 85 06                    STA $06
+//   $C0D7: 4C EE C0                 JMP dirs
 // held:
-//   $C0BE: E6 06                    INC $06
-//   $C0C0: A5 06                    LDA $06
-//   $C0C2: C9 18                    CMP #$18
-//   $C0C4: 90 0C                    BCC dirs
-//   $C0C6: A9 14                    LDA #$14
-//   $C0C8: 85 06                    STA $06
-//   $C0CA: A5 02                    LDA $02
-//   $C0CC: 29 0C                    AND #$0C
-//   $C0CE: 05 04                    ORA $04
-//   $C0D0: 85 04                    STA $04
+//   $C0DA: E6 06                    INC $06
+//   $C0DC: A5 06                    LDA $06
+//   $C0DE: C9 18                    CMP #$18
+//   $C0E0: 90 0C                    BCC dirs
+//   $C0E2: A9 14                    LDA #$14
+//   $C0E4: 85 06                    STA $06
+//   $C0E6: A5 02                    LDA $02
+//   $C0E8: 29 0C                    AND #$0C
+//   $C0EA: 05 04                    ORA $04
+//   $C0EC: 85 04                    STA $04
 // dirs:
-//   $C0D2: A5 00                    LDA $00
-//   $C0D4: 85 07                    STA $07
-//   $C0D6: A5 04                    LDA $04
-//   $C0D8: 29 04                    AND #$04
-//   $C0DA: F0 0C                    BEQ not_down
-//   $C0DC: AE 00 00                 LDX $0000
-//   $C0DF: E8                       INX
-//   $C0E0: 8A                       TXA
-//   $C0E1: CD 0D 00                 CMP $000D
-//   $C0E4: B0 02                    BCS not_down
-//   $C0E6: 85 00                    STA $00
-// not_down:
-//   $C0E8: A5 04                    LDA $04
-//   $C0EA: 29 08                    AND #$08
-//   $C0EC: F0 06                    BEQ not_up
 //   $C0EE: A5 00                    LDA $00
-//   $C0F0: F0 02                    BEQ not_up
-//   $C0F2: C6 00                    DEC $00
+//   $C0F0: 85 07                    STA $07
+//   $C0F2: A5 04                    LDA $04
+//   $C0F4: 29 04                    AND #$04
+//   $C0F6: F0 0C                    BEQ not_down
+//   $C0F8: AE 00 00                 LDX $0000
+//   $C0FB: E8                       INX
+//   $C0FC: 8A                       TXA
+//   $C0FD: CD 0D 00                 CMP $000D
+//   $C100: B0 02                    BCS not_down
+//   $C102: 85 00                    STA $00
+// not_down:
+//   $C104: A5 04                    LDA $04
+//   $C106: 29 08                    AND #$08
+//   $C108: F0 06                    BEQ not_up
+//   $C10A: A5 00                    LDA $00
+//   $C10C: F0 02                    BEQ not_up
+//   $C10E: C6 00                    DEC $00
 // not_up:
-//   $C0F4: A5 04                    LDA $04
-//   $C0F6: 29 01                    AND #$01
-//   $C0F8: F0 13                    BEQ not_right
-//   $C0FA: A5 00                    LDA $00
-//   $C0FC: 18                       CLC
-//   $C0FD: 69 14                    ADC #$14
-//   $C0FF: B0 05                    BCS clamp
-//   $C101: CD 0D 00                 CMP $000D
-//   $C104: 90 05                    BCC set_r
+//   $C110: A5 04                    LDA $04
+//   $C112: 29 01                    AND #$01
+//   $C114: F0 13                    BEQ not_right
+//   $C116: A5 00                    LDA $00
+//   $C118: 18                       CLC
+//   $C119: 69 14                    ADC #$14
+//   $C11B: B0 05                    BCS clamp
+//   $C11D: CD 0D 00                 CMP $000D
+//   $C120: 90 05                    BCC set_r
 // clamp:
-//   $C106: AE 0D 00                 LDX $000D
-//   $C109: CA                       DEX
-//   $C10A: 8A                       TXA
+//   $C122: AE 0D 00                 LDX $000D
+//   $C125: CA                       DEX
+//   $C126: 8A                       TXA
 // set_r:
-//   $C10B: 85 00                    STA $00
+//   $C127: 85 00                    STA $00
 // not_right:
-//   $C10D: A5 04                    LDA $04
-//   $C10F: 29 02                    AND #$02
-//   $C111: F0 0B                    BEQ not_left
-//   $C113: A5 00                    LDA $00
-//   $C115: 38                       SEC
-//   $C116: E9 14                    SBC #$14
-//   $C118: B0 02                    BCS set_l
-//   $C11A: A9 00                    LDA #$00
+//   $C129: A5 04                    LDA $04
+//   $C12B: 29 02                    AND #$02
+//   $C12D: F0 0B                    BEQ not_left
+//   $C12F: A5 00                    LDA $00
+//   $C131: 38                       SEC
+//   $C132: E9 14                    SBC #$14
+//   $C134: B0 02                    BCS set_l
+//   $C136: A9 00                    LDA #$00
 // set_l:
-//   $C11C: 85 00                    STA $00
+//   $C138: 85 00                    STA $00
 // not_left:
-//   $C11E: A5 04                    LDA $04
-//   $C120: 29 90                    AND #$90
-//   $C122: F0 03                    BEQ no_go
-//   $C124: 4C 17 C2                 JMP launch
+//   $C13A: A5 0F                    LDA $0F
+//   $C13C: F0 09                    BEQ no_go
+//   $C13E: A5 04                    LDA $04
+//   $C140: 29 90                    AND #$90
+//   $C142: F0 03                    BEQ no_go
+//   $C144: 4C 37 C2                 JMP launch
 // no_go:
-//   $C127: A5 00                    LDA $00
-//   $C129: CD 01 00                 CMP $0001
-//   $C12C: B0 05                    BCS ge_top
-//   $C12E: 85 01                    STA $01
-//   $C130: 4C 7B C1                 JMP redraw
+//   $C147: A5 00                    LDA $00
+//   $C149: CD 01 00                 CMP $0001
+//   $C14C: B0 05                    BCS ge_top
+//   $C14E: 85 01                    STA $01
+//   $C150: 4C 9B C1                 JMP redraw
 // ge_top:
-//   $C133: 38                       SEC
-//   $C134: ED 01 00                 SBC $0001
-//   $C137: C9 14                    CMP #$14
-//   $C139: 90 0A                    BCC same_page
-//   $C13B: A5 00                    LDA $00
-//   $C13D: 38                       SEC
-//   $C13E: E9 13                    SBC #$13
-//   $C140: 85 01                    STA $01
-//   $C142: 4C 7B C1                 JMP redraw
+//   $C153: 38                       SEC
+//   $C154: ED 01 00                 SBC $0001
+//   $C157: C9 14                    CMP #$14
+//   $C159: 90 0A                    BCC same_page
+//   $C15B: A5 00                    LDA $00
+//   $C15D: 38                       SEC
+//   $C15E: E9 13                    SBC #$13
+//   $C160: 85 01                    STA $01
+//   $C162: 4C 9B C1                 JMP redraw
 // same_page:
-//   $C145: A5 00                    LDA $00
-//   $C147: CD 07 00                 CMP $0007
-//   $C14A: D0 03                    BNE move
-//   $C14C: 4C 84 C0                 JMP main
+//   $C165: A5 00                    LDA $00
+//   $C167: CD 07 00                 CMP $0007
+//   $C16A: D0 03                    BNE move
+//   $C16C: 4C 86 C0                 JMP main
 // move:
-//   $C14F: A5 07                    LDA $07
-//   $C151: 38                       SEC
-//   $C152: ED 01 00                 SBC $0001
-//   $C155: 20 89 C1                 JSR rowaddr
-//   $C158: A9 20                    LDA #$20
-//   $C15A: 8D 07 20                 STA $2007
-//   $C15D: A5 00                    LDA $00
-//   $C15F: 38                       SEC
-//   $C160: ED 01 00                 SBC $0001
-//   $C163: 20 89 C1                 JSR rowaddr
-//   $C166: A9 3E                    LDA #$3E
-//   $C168: 8D 07 20                 STA $2007
-//   $C16B: A9 00                    LDA #$00
-//   $C16D: 8D 05 20                 STA $2005
-//   $C170: 8D 05 20                 STA $2005
-//   $C173: A9 80                    LDA #$80
-//   $C175: 8D 00 20                 STA $2000
-//   $C178: 4C 84 C0                 JMP main
+//   $C16F: A5 07                    LDA $07
+//   $C171: 38                       SEC
+//   $C172: ED 01 00                 SBC $0001
+//   $C175: 20 A9 C1                 JSR rowaddr
+//   $C178: A9 20                    LDA #$20
+//   $C17A: 8D 07 20                 STA $2007
+//   $C17D: A5 00                    LDA $00
+//   $C17F: 38                       SEC
+//   $C180: ED 01 00                 SBC $0001
+//   $C183: 20 A9 C1                 JSR rowaddr
+//   $C186: A9 3E                    LDA #$3E
+//   $C188: 8D 07 20                 STA $2007
+//   $C18B: A9 00                    LDA #$00
+//   $C18D: 8D 05 20                 STA $2005
+//   $C190: 8D 05 20                 STA $2005
+//   $C193: A9 80                    LDA #$80
+//   $C195: 8D 00 20                 STA $2000
+//   $C198: 4C 86 C0                 JMP main
 // redraw:
-//   $C17B: A9 00                    LDA #$00
-//   $C17D: 8D 01 20                 STA $2001
-//   $C180: 20 A9 C1                 JSR draw_page
-//   $C183: 20 FF C1                 JSR show
-//   $C186: 4C 84 C0                 JMP main
+//   $C19B: A9 00                    LDA #$00
+//   $C19D: 8D 01 20                 STA $2001
+//   $C1A0: 20 C9 C1                 JSR draw_page
+//   $C1A3: 20 1F C2                 JSR show
+//   $C1A6: 4C 86 C0                 JMP main
 // rowaddr:
-//   $C189: 85 0A                    STA $0A
-//   $C18B: 4A                       LSR_A
-//   $C18C: 4A                       LSR_A
-//   $C18D: 4A                       LSR_A
-//   $C18E: 85 0B                    STA $0B
-//   $C190: A5 0A                    LDA $0A
-//   $C192: 0A                       ASL_A
-//   $C193: 0A                       ASL_A
-//   $C194: 0A                       ASL_A
-//   $C195: 0A                       ASL_A
-//   $C196: 0A                       ASL_A
-//   $C197: 18                       CLC
-//   $C198: 69 E1                    ADC #$E1
-//   $C19A: 85 0C                    STA $0C
-//   $C19C: A5 0B                    LDA $0B
-//   $C19E: 69 20                    ADC #$20
-//   $C1A0: 8D 06 20                 STA $2006
-//   $C1A3: A5 0C                    LDA $0C
-//   $C1A5: 8D 06 20                 STA $2006
-//   $C1A8: 60                       RTS
+//   $C1A9: 85 0A                    STA $0A
+//   $C1AB: 4A                       LSR_A
+//   $C1AC: 4A                       LSR_A
+//   $C1AD: 4A                       LSR_A
+//   $C1AE: 85 0B                    STA $0B
+//   $C1B0: A5 0A                    LDA $0A
+//   $C1B2: 0A                       ASL_A
+//   $C1B3: 0A                       ASL_A
+//   $C1B4: 0A                       ASL_A
+//   $C1B5: 0A                       ASL_A
+//   $C1B6: 0A                       ASL_A
+//   $C1B7: 18                       CLC
+//   $C1B8: 69 E1                    ADC #$E1
+//   $C1BA: 85 0C                    STA $0C
+//   $C1BC: A5 0B                    LDA $0B
+//   $C1BE: 69 20                    ADC #$20
+//   $C1C0: 8D 06 20                 STA $2006
+//   $C1C3: A5 0C                    LDA $0C
+//   $C1C5: 8D 06 20                 STA $2006
+//   $C1C8: 60                       RTS
 // draw_page:
-//   $C1A9: A9 00                    LDA #$00
-//   $C1AB: 85 0E                    STA $0E
+//   $C1C9: A9 00                    LDA #$00
+//   $C1CB: 85 0E                    STA $0E
 // dp_row:
-//   $C1AD: A5 0E                    LDA $0E
-//   $C1AF: 20 89 C1                 JSR rowaddr
-//   $C1B2: A5 0E                    LDA $0E
-//   $C1B4: 18                       CLC
-//   $C1B5: 6D 01 00                 ADC $0001
-//   $C1B8: AA                       TAX
-//   $C1B9: 8A                       TXA
-//   $C1BA: CD 00 00                 CMP $0000
-//   $C1BD: D0 04                    BNE dp_nocur
-//   $C1BF: A9 3E                    LDA #$3E
-//   $C1C1: D0 02                    BNE dp_cur
+//   $C1CD: A5 0E                    LDA $0E
+//   $C1CF: 20 A9 C1                 JSR rowaddr
+//   $C1D2: A5 0E                    LDA $0E
+//   $C1D4: 18                       CLC
+//   $C1D5: 6D 01 00                 ADC $0001
+//   $C1D8: AA                       TAX
+//   $C1D9: 8A                       TXA
+//   $C1DA: CD 00 00                 CMP $0000
+//   $C1DD: D0 04                    BNE dp_nocur
+//   $C1DF: A9 3E                    LDA #$3E
+//   $C1E1: D0 02                    BNE dp_cur
 // dp_nocur:
-//   $C1C3: A9 20                    LDA #$20
+//   $C1E3: A9 20                    LDA #$20
 // dp_cur:
-//   $C1C5: 8D 07 20                 STA $2007
-//   $C1C8: A9 20                    LDA #$20
-//   $C1CA: 8D 07 20                 STA $2007
-//   $C1CD: 8A                       TXA
-//   $C1CE: CD 0D 00                 CMP $000D
-//   $C1D1: B0 19                    BCS dp_blank
-//   $C1D3: BD 00 81                 LDA $8100,X
-//   $C1D6: 85 08                    STA $08
-//   $C1D8: BD 80 81                 LDA $8180,X
-//   $C1DB: 85 09                    STA $09
-//   $C1DD: A0 00                    LDY #$00
+//   $C1E5: 8D 07 20                 STA $2007
+//   $C1E8: A9 20                    LDA #$20
+//   $C1EA: 8D 07 20                 STA $2007
+//   $C1ED: 8A                       TXA
+//   $C1EE: CD 0D 00                 CMP $000D
+//   $C1F1: B0 19                    BCS dp_blank
+//   $C1F3: BD 00 81                 LDA $8100,X
+//   $C1F6: 85 08                    STA $08
+//   $C1F8: BD 80 81                 LDA $8180,X
+//   $C1FB: 85 09                    STA $09
+//   $C1FD: A0 00                    LDY #$00
 // dp_ch:
-//   $C1DF: B1 08                    LDA $08
-//   $C1E1: 8D 07 20                 STA $2007
-//   $C1E4: C8                       INY
-//   $C1E5: C0 1C                    CPY #$1C
-//   $C1E7: D0 F6                    BNE dp_ch
-//   $C1E9: 4C F6 C1                 JMP dp_next
+//   $C1FF: B1 08                    LDA $08
+//   $C201: 8D 07 20                 STA $2007
+//   $C204: C8                       INY
+//   $C205: C0 1C                    CPY #$1C
+//   $C207: D0 F6                    BNE dp_ch
+//   $C209: 4C 16 C2                 JMP dp_next
 // dp_blank:
-//   $C1EC: A0 1C                    LDY #$1C
-//   $C1EE: A9 20                    LDA #$20
+//   $C20C: A0 1C                    LDY #$1C
+//   $C20E: A9 20                    LDA #$20
 // dp_b:
-//   $C1F0: 8D 07 20                 STA $2007
-//   $C1F3: 88                       DEY
-//   $C1F4: D0 FA                    BNE dp_b
+//   $C210: 8D 07 20                 STA $2007
+//   $C213: 88                       DEY
+//   $C214: D0 FA                    BNE dp_b
 // dp_next:
-//   $C1F6: E6 0E                    INC $0E
-//   $C1F8: A5 0E                    LDA $0E
-//   $C1FA: C9 14                    CMP #$14
-//   $C1FC: D0 AF                    BNE dp_row
-//   $C1FE: 60                       RTS
+//   $C216: E6 0E                    INC $0E
+//   $C218: A5 0E                    LDA $0E
+//   $C21A: C9 14                    CMP #$14
+//   $C21C: D0 AF                    BNE dp_row
+//   $C21E: 60                       RTS
 // show:
 // sh_w:
-//   $C1FF: 2C 02 20                 BIT $2002
-//   $C202: 10 FB                    BPL sh_w
-//   $C204: A9 00                    LDA #$00
-//   $C206: 8D 05 20                 STA $2005
-//   $C209: 8D 05 20                 STA $2005
-//   $C20C: A9 80                    LDA #$80
-//   $C20E: 8D 00 20                 STA $2000
-//   $C211: A9 0A                    LDA #$0A
-//   $C213: 8D 01 20                 STA $2001
-//   $C216: 60                       RTS
+//   $C21F: 2C 02 20                 BIT $2002
+//   $C222: 10 FB                    BPL sh_w
+//   $C224: A9 00                    LDA #$00
+//   $C226: 8D 05 20                 STA $2005
+//   $C229: 8D 05 20                 STA $2005
+//   $C22C: A9 80                    LDA #$80
+//   $C22E: 8D 00 20                 STA $2000
+//   $C231: A9 0A                    LDA #$0A
+//   $C233: 8D 01 20                 STA $2001
+//   $C236: 60                       RTS
 // launch:
-//   $C217: A2 00                    LDX #$00
+//   $C237: A2 00                    LDX #$00
 // cp:
-//   $C219: BD 4B C2                 LDA stub,X
-//   $C21C: 9D 00 03                 STA $0300,X
-//   $C21F: E8                       INX
-//   $C220: E0 39                    CPX #$39
-//   $C222: D0 F5                    BNE cp
-//   $C224: 4C 00 03                 JMP $0300
+//   $C239: BD 6B C2                 LDA stub,X
+//   $C23C: 9D 00 03                 STA $0300,X
+//   $C23F: E8                       INX
+//   $C240: E0 39                    CPX #$39
+//   $C242: D0 F5                    BNE cp
+//   $C244: 4C 00 03                 JMP $0300
 // nmi:
-//   $C227: E6 05                    INC $05
-//   $C229: 40                       RTI
+//   $C247: E6 05                    INC $05
+//   $C249: 40                       RTI
 // irq:
-//   $C22A: 40                       RTI
+//   $C24A: 40                       RTI
 // paltab:
-//   $C22B: 0F 30 11 21 0F 21 11 30  パレット(背景 0 = 白・青・水色、背景 1 = 水色の文字)。NSF プレイヤーと同じ
+//   $C24B: 0F 30 11 21 0F 21 11 30  パレット(背景 0 = 白・青・水色、背景 1 = 水色の文字)。NSF プレイヤーと同じ
 // stub:
-//   $C24B: 78 A9 00 8D 00 20 8D 01  本体 RAM $0300 へ写す部分(57 バイト)
+//   $C26B: 78 A9 00 8D 00 20 8D 01  本体 RAM $0300 へ写す部分(57 バイト)
 static const uint8_t menud_code[16384] = {
     0x78, 0xD8, 0xA2, 0xFF, 0x9A, 0xA9, 0x00, 0x8D, 0x00, 0x20, 0x8D, 0x01, 0x20, 0x8D, 0x15, 0x40,
     0x8D, 0x10, 0x40, 0xA9, 0x40, 0x8D, 0x17, 0x40, 0x2C, 0x02, 0x20, 0x10, 0xFB, 0x2C, 0x02, 0x20,
-    0x10, 0xFB, 0xA9, 0x3F, 0x8D, 0x06, 0x20, 0xA9, 0x00, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0x2B,
+    0x10, 0xFB, 0xA9, 0x3F, 0x8D, 0x06, 0x20, 0xA9, 0x00, 0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0x4B,
     0xC2, 0x8D, 0x07, 0x20, 0xE8, 0xE0, 0x20, 0xD0, 0xF5, 0xA9, 0x20, 0x8D, 0x06, 0x20, 0xA9, 0x00,
     0x8D, 0x06, 0x20, 0xA2, 0x00, 0xBD, 0x00, 0x98, 0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xA2, 0x00,
     0xBD, 0x00, 0x99, 0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xA2, 0x00, 0xBD, 0x00, 0x9A, 0x8D, 0x07,
     0x20, 0xE8, 0xD0, 0xF7, 0xA2, 0x00, 0xBD, 0x00, 0x9B, 0x8D, 0x07, 0x20, 0xE8, 0xD0, 0xF7, 0xAD,
-    0x00, 0x80, 0x85, 0x0D, 0xA9, 0x00, 0x85, 0x00, 0x85, 0x01, 0x85, 0x03, 0x85, 0x06, 0x20, 0xA9,
-    0xC1, 0x20, 0xFF, 0xC1, 0xA9, 0x00, 0x85, 0x05, 0xA5, 0x05, 0xF0, 0xFC, 0xA9, 0x01, 0x8D, 0x16,
-    0x40, 0xA9, 0x00, 0x8D, 0x16, 0x40, 0xA2, 0x08, 0xAD, 0x16, 0x40, 0x29, 0x03, 0xC9, 0x01, 0x2E,
-    0x02, 0x00, 0xCA, 0xD0, 0xF3, 0xA5, 0x03, 0x49, 0xFF, 0x25, 0x02, 0x85, 0x04, 0xA5, 0x02, 0x85,
-    0x03, 0xA5, 0x02, 0x29, 0x0C, 0xD0, 0x07, 0xA9, 0x00, 0x85, 0x06, 0x4C, 0xD2, 0xC0, 0xE6, 0x06,
-    0xA5, 0x06, 0xC9, 0x18, 0x90, 0x0C, 0xA9, 0x14, 0x85, 0x06, 0xA5, 0x02, 0x29, 0x0C, 0x05, 0x04,
-    0x85, 0x04, 0xA5, 0x00, 0x85, 0x07, 0xA5, 0x04, 0x29, 0x04, 0xF0, 0x0C, 0xAE, 0x00, 0x00, 0xE8,
-    0x8A, 0xCD, 0x0D, 0x00, 0xB0, 0x02, 0x85, 0x00, 0xA5, 0x04, 0x29, 0x08, 0xF0, 0x06, 0xA5, 0x00,
-    0xF0, 0x02, 0xC6, 0x00, 0xA5, 0x04, 0x29, 0x01, 0xF0, 0x13, 0xA5, 0x00, 0x18, 0x69, 0x14, 0xB0,
-    0x05, 0xCD, 0x0D, 0x00, 0x90, 0x05, 0xAE, 0x0D, 0x00, 0xCA, 0x8A, 0x85, 0x00, 0xA5, 0x04, 0x29,
-    0x02, 0xF0, 0x0B, 0xA5, 0x00, 0x38, 0xE9, 0x14, 0xB0, 0x02, 0xA9, 0x00, 0x85, 0x00, 0xA5, 0x04,
-    0x29, 0x90, 0xF0, 0x03, 0x4C, 0x17, 0xC2, 0xA5, 0x00, 0xCD, 0x01, 0x00, 0xB0, 0x05, 0x85, 0x01,
-    0x4C, 0x7B, 0xC1, 0x38, 0xED, 0x01, 0x00, 0xC9, 0x14, 0x90, 0x0A, 0xA5, 0x00, 0x38, 0xE9, 0x13,
-    0x85, 0x01, 0x4C, 0x7B, 0xC1, 0xA5, 0x00, 0xCD, 0x07, 0x00, 0xD0, 0x03, 0x4C, 0x84, 0xC0, 0xA5,
-    0x07, 0x38, 0xED, 0x01, 0x00, 0x20, 0x89, 0xC1, 0xA9, 0x20, 0x8D, 0x07, 0x20, 0xA5, 0x00, 0x38,
-    0xED, 0x01, 0x00, 0x20, 0x89, 0xC1, 0xA9, 0x3E, 0x8D, 0x07, 0x20, 0xA9, 0x00, 0x8D, 0x05, 0x20,
-    0x8D, 0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00, 0x20, 0x4C, 0x84, 0xC0, 0xA9, 0x00, 0x8D, 0x01, 0x20,
-    0x20, 0xA9, 0xC1, 0x20, 0xFF, 0xC1, 0x4C, 0x84, 0xC0, 0x85, 0x0A, 0x4A, 0x4A, 0x4A, 0x85, 0x0B,
+    0x00, 0x80, 0x85, 0x0D, 0xA9, 0x00, 0x85, 0x00, 0x85, 0x01, 0x85, 0x03, 0x85, 0x06, 0x85, 0x0F,
+    0x20, 0xC9, 0xC1, 0x20, 0x1F, 0xC2, 0xA9, 0x00, 0x85, 0x05, 0xA5, 0x05, 0xF0, 0xFC, 0xAD, 0xF3,
+    0x5F, 0xCD, 0x0D, 0x00, 0xB0, 0x05, 0x85, 0x00, 0x4C, 0x37, 0xC2, 0xA9, 0x01, 0x8D, 0x16, 0x40,
+    0xA9, 0x00, 0x8D, 0x16, 0x40, 0xA2, 0x08, 0xAD, 0x16, 0x40, 0x29, 0x03, 0xC9, 0x01, 0x2E, 0x02,
+    0x00, 0xCA, 0xD0, 0xF3, 0xA5, 0x02, 0x8D, 0xF1, 0x5F, 0x29, 0x90, 0xD0, 0x04, 0xA9, 0x01, 0x85,
+    0x0F, 0xA5, 0x03, 0x49, 0xFF, 0x25, 0x02, 0x85, 0x04, 0xA5, 0x02, 0x85, 0x03, 0xA5, 0x02, 0x29,
+    0x0C, 0xD0, 0x07, 0xA9, 0x00, 0x85, 0x06, 0x4C, 0xEE, 0xC0, 0xE6, 0x06, 0xA5, 0x06, 0xC9, 0x18,
+    0x90, 0x0C, 0xA9, 0x14, 0x85, 0x06, 0xA5, 0x02, 0x29, 0x0C, 0x05, 0x04, 0x85, 0x04, 0xA5, 0x00,
+    0x85, 0x07, 0xA5, 0x04, 0x29, 0x04, 0xF0, 0x0C, 0xAE, 0x00, 0x00, 0xE8, 0x8A, 0xCD, 0x0D, 0x00,
+    0xB0, 0x02, 0x85, 0x00, 0xA5, 0x04, 0x29, 0x08, 0xF0, 0x06, 0xA5, 0x00, 0xF0, 0x02, 0xC6, 0x00,
+    0xA5, 0x04, 0x29, 0x01, 0xF0, 0x13, 0xA5, 0x00, 0x18, 0x69, 0x14, 0xB0, 0x05, 0xCD, 0x0D, 0x00,
+    0x90, 0x05, 0xAE, 0x0D, 0x00, 0xCA, 0x8A, 0x85, 0x00, 0xA5, 0x04, 0x29, 0x02, 0xF0, 0x0B, 0xA5,
+    0x00, 0x38, 0xE9, 0x14, 0xB0, 0x02, 0xA9, 0x00, 0x85, 0x00, 0xA5, 0x0F, 0xF0, 0x09, 0xA5, 0x04,
+    0x29, 0x90, 0xF0, 0x03, 0x4C, 0x37, 0xC2, 0xA5, 0x00, 0xCD, 0x01, 0x00, 0xB0, 0x05, 0x85, 0x01,
+    0x4C, 0x9B, 0xC1, 0x38, 0xED, 0x01, 0x00, 0xC9, 0x14, 0x90, 0x0A, 0xA5, 0x00, 0x38, 0xE9, 0x13,
+    0x85, 0x01, 0x4C, 0x9B, 0xC1, 0xA5, 0x00, 0xCD, 0x07, 0x00, 0xD0, 0x03, 0x4C, 0x86, 0xC0, 0xA5,
+    0x07, 0x38, 0xED, 0x01, 0x00, 0x20, 0xA9, 0xC1, 0xA9, 0x20, 0x8D, 0x07, 0x20, 0xA5, 0x00, 0x38,
+    0xED, 0x01, 0x00, 0x20, 0xA9, 0xC1, 0xA9, 0x3E, 0x8D, 0x07, 0x20, 0xA9, 0x00, 0x8D, 0x05, 0x20,
+    0x8D, 0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00, 0x20, 0x4C, 0x86, 0xC0, 0xA9, 0x00, 0x8D, 0x01, 0x20,
+    0x20, 0xC9, 0xC1, 0x20, 0x1F, 0xC2, 0x4C, 0x86, 0xC0, 0x85, 0x0A, 0x4A, 0x4A, 0x4A, 0x85, 0x0B,
     0xA5, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x18, 0x69, 0xE1, 0x85, 0x0C, 0xA5, 0x0B, 0x69, 0x20,
     0x8D, 0x06, 0x20, 0xA5, 0x0C, 0x8D, 0x06, 0x20, 0x60, 0xA9, 0x00, 0x85, 0x0E, 0xA5, 0x0E, 0x20,
-    0x89, 0xC1, 0xA5, 0x0E, 0x18, 0x6D, 0x01, 0x00, 0xAA, 0x8A, 0xCD, 0x00, 0x00, 0xD0, 0x04, 0xA9,
+    0xA9, 0xC1, 0xA5, 0x0E, 0x18, 0x6D, 0x01, 0x00, 0xAA, 0x8A, 0xCD, 0x00, 0x00, 0xD0, 0x04, 0xA9,
     0x3E, 0xD0, 0x02, 0xA9, 0x20, 0x8D, 0x07, 0x20, 0xA9, 0x20, 0x8D, 0x07, 0x20, 0x8A, 0xCD, 0x0D,
     0x00, 0xB0, 0x19, 0xBD, 0x00, 0x81, 0x85, 0x08, 0xBD, 0x80, 0x81, 0x85, 0x09, 0xA0, 0x00, 0xB1,
-    0x08, 0x8D, 0x07, 0x20, 0xC8, 0xC0, 0x1C, 0xD0, 0xF6, 0x4C, 0xF6, 0xC1, 0xA0, 0x1C, 0xA9, 0x20,
+    0x08, 0x8D, 0x07, 0x20, 0xC8, 0xC0, 0x1C, 0xD0, 0xF6, 0x4C, 0x16, 0xC2, 0xA0, 0x1C, 0xA9, 0x20,
     0x8D, 0x07, 0x20, 0x88, 0xD0, 0xFA, 0xE6, 0x0E, 0xA5, 0x0E, 0xC9, 0x14, 0xD0, 0xAF, 0x60, 0x2C,
     0x02, 0x20, 0x10, 0xFB, 0xA9, 0x00, 0x8D, 0x05, 0x20, 0x8D, 0x05, 0x20, 0xA9, 0x80, 0x8D, 0x00,
-    0x20, 0xA9, 0x0A, 0x8D, 0x01, 0x20, 0x60, 0xA2, 0x00, 0xBD, 0x4B, 0xC2, 0x9D, 0x00, 0x03, 0xE8,
+    0x20, 0xA9, 0x0A, 0x8D, 0x01, 0x20, 0x60, 0xA2, 0x00, 0xBD, 0x6B, 0xC2, 0x9D, 0x00, 0x03, 0xE8,
     0xE0, 0x39, 0xD0, 0xF5, 0x4C, 0x00, 0x03, 0xE6, 0x05, 0x40, 0x40, 0x0F, 0x30, 0x11, 0x21, 0x0F,
     0x21, 0x11, 0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x0F,
     0x21, 0x11, 0x30, 0x0F, 0x30, 0x11, 0x21, 0x0F, 0x30, 0x11, 0x21, 0x78, 0xA9, 0x00, 0x8D, 0x00,
@@ -1366,9 +1384,7 @@ static const uint8_t menud_code[16384] = {
     0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA,
     0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA,
     0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA,
-    0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA,
-    0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA,
-    0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0x27, 0xC2, 0x00, 0xC0, 0x2A, 0xC2,
+    0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0x47, 0xC2, 0x00, 0xC0, 0x4A, 0xC2,
 };
 static const uint8_t menud_nt[1024] = {
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,

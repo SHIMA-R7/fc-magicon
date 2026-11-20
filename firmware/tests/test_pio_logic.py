@@ -2,7 +2,7 @@
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
-def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pin=25, data_out=None, rx_capacity=None, rx_drain_at=(), stats=None):
+def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pin=25, data_out=None, rx_capacity=None, rx_drain_at=(), stats=None, entry_label=None, wrap_label=None, initial_registers=None, gpio_window_base=None):
     code, labels, wrap, end = [], {}, 0, None
     for raw in path.read_text(encoding='utf-8').splitlines():
         line = raw.split(';')[0].strip()
@@ -10,9 +10,12 @@ def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pi
         if line == '.wrap_target': wrap = len(code); continue
         if line == '.wrap': end = len(code)-1; continue
         if not line or line.startswith('.'): continue
-        if line.endswith(':'): labels[line[:-1]] = len(code); continue
+        if line.endswith(':'): labels[line[:-1].removeprefix('public ')] = len(code); continue
         code.append(line.replace(',', '').split())
     pc=0; regs=dict(x=0,y=0,isr=0,osr=0); driven=[]; pushes=[]; values=[]; consumed=0; delay=0
+    if initial_registers:regs.update(initial_registers)
+    if entry_label is not None:pc=labels[entry_label]
+    if wrap_label is not None:wrap=labels[wrap_label]
     arrivals=reply_at if isinstance(reply_at,list) else ([] if reply_at is None else [reply_at])
     occupancy=0; drains=set(rx_drain_at)
     if stats is None: stats={}
@@ -20,13 +23,17 @@ def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pi
     for tick in range(steps):
         if tick in drains and occupancy: occupancy-=1
         if delay: delay-=1; continue
-        pins=levels(tick); ins=code[pc]; op=ins[0]; next_pc=pc+1
+        pins=levels(tick); ins=code[pc]; op=ins[0]; next_pc=pc+1; stalled=False
         def val(name):
             if name.startswith('~') or name.startswith('!'): return (~val(name[1:]))&0xffffffff
+            if name=='pins' and gpio_window_base is not None:
+                word=(pins>>gpio_window_base)&0xffffffff
+                rotation=(base-gpio_window_base)&31
+                return ((word>>rotation)|(word<<(32-rotation)))&0xffffffff
             return 0 if name=='null' else ((pins>>base) if name=='pins' else regs[name])
         if op=='wait':
             pin=int(ins[3]) + (base if ins[2]=='pin' else 0)
-            if ((pins>>pin)&1)!=int(ins[1]): next_pc=pc
+            if ((pins>>pin)&1)!=int(ins[1]): next_pc=pc; stalled=True
         elif op=='nop': delay=int(ins[1].strip('[]')) if len(ins)>1 else 0
         elif op=='mov':
             if ins[1]=='exec':
@@ -47,7 +54,7 @@ def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pi
         elif op=='pull':
             if consumed<len(arrivals) and tick>=arrivals[consumed]:
                 regs['osr']=reply[consumed] if isinstance(reply,list) else reply;consumed+=1
-            elif ins[1]=='block': next_pc=pc
+            elif ins[1]=='block': next_pc=pc; stalled=True
             else: regs['osr']=regs['x']
         elif op=='push':
             if rx_capacity is not None and occupancy>=rx_capacity:
@@ -55,6 +62,7 @@ def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pi
                     stats['rx_dropped']+=1; regs['isr']=0
                 else:
                     stats['rx_stall_ticks']+=1; next_pc=pc
+                    stalled=True
             else:
                 pushes.append(tick); values.append(regs['isr']); regs['isr']=0
                 occupancy+=1
@@ -65,12 +73,15 @@ def run(path, levels, reply_at=None, reply=0x8000ff55, steps=200, base=0, jmp_pi
             if len(ins)==3:
                 c=ins[1]
                 if c=='pin':cond=bool(pins&(1<<jmp_pin))
+                elif c=='x!=y':cond=regs['x']!=regs['y']
                 elif c.startswith('!'):cond=not regs[c[1:]]
                 elif c.endswith('--'):
                     name=c[:-2];cond=regs[name]!=0;regs[name]=(regs[name]-1)&0xffffffff
                 else: raise AssertionError(c)
             if cond:next_pc=labels[ins[-1]]
         else:raise AssertionError(ins)
+        if op!='nop' and ins[-1].startswith('[') and not stalled:
+            delay=int(ins[-1].strip('[]'))
         if next_pc==end+1 and pc==end:next_pc=wrap
         pc=next_pc
     return driven,pushes,pc==labels.get('halt'),values
