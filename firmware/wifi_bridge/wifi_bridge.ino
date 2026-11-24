@@ -15,19 +15,29 @@
 #include "hal/spimem_flash_ll.h"
 #include "wifi_secrets.h"
 #include "swd_bridge.h"
+#include "mic_recorder.h"
+#include "mic_diagnostic.h"
 
 // 手持ちの C6 N4 ボードはフラッシュを 80MHz で読むと化ける(パーティションテーブル 0x50AA が 0x500A / 0x502A になる、
 // Wi-Fi の初期化が ESP_ERR_NOT_FOUND で失敗する)。Arduino の C6 用ライブラリは 80MHz 固定なので、
 // フラッシュのドライバーが初期化された後・Arduino が NVS を読む前(グローバルのコンストラクター)に 40MHz(80MHz ÷ 2)に落とす。
 // ブートローダーの方は FQBN の FlashFreq=40 で 40MHz になる(build_bridge.ps1)。
-__attribute__((constructor)) static void flash_40mhz() {
+static void flash_40mhz() {
   spi_flash_hal_context_t *h = (spi_flash_hal_context_t *)esp_flash_default_chip->host;
   h->clock_conf.spimem = spimem_flash_ll_calculate_clock_reg(2);
+  // First application constructor: force the NC relay OFF before other C++
+  // constructors, Arduino startup, Wi-Fi or OLED initialization.
+  micrec::init_relay();
 }
+// Place the entry explicitly: verify this is in the IDF priority-init table,
+// rather than relying on Arduino's generated constructor declarations.
+__attribute__((used, section(".init_array.00101")))
+static void (*const relay_early_initializer)(void) = flash_40mhz;
 
 static const uint16_t TCP_PORT = 5000;
 static WiFiServer server(TCP_PORT);
 static WiFiClient client;
+#include "web_browser_device.h"
 static uint8_t buf[4096];
 static volatile int last_reason;        // 最後に切れた理由(Wi-Fi の reason コード。つながらない時の手がかり)
 
@@ -130,7 +140,17 @@ static bool usb_write_all(const uint8_t *p, size_t n) {
 }
 
 void setup() {
+  micrec::init_relay();
+#ifdef RGB_BUILTIN
+  // The C6 board's addressable RGB LED can retain a bright power-on color.
+  // Turn it off before Wi-Fi/OLED initialization; GPIO0 remains untouched.
+  rgbLedWrite(RGB_BUILTIN, 0, 0, 0);
+#endif
   Serial0.begin(115200);                // 様子の表示(debug_report)
+  Serial0.printf("RELAY BOOT gpio1=%d (LOW=OFF)\r\n",gpio_get_level(GPIO_NUM_1));
+#ifdef RGB_BUILTIN
+  Serial0.println("RGB LED: off");
+#endif
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(16384);
   Serial.begin(115200);                 // USB Serial/JTAG(速度の指定は意味を持たない)
@@ -149,6 +169,17 @@ void setup() {
 }
 
 void loop() {
+  if (micrec::poll()) {
+    static int shown = -1;
+    int state = micrec::armed ? (micrec::recording ? 1 : micrec::playing ? 2 : 0) : 3;
+    if (oled_ready && shown != state) {
+      oled.clear(); oled.drawString(0, 0, "FC MICROPHONE");
+      oled.drawString(0, 2, state == 1 ? "RECORDING" : state == 2 ? "DAC PLAYBACK" : state == 0 ? "READY: 2P A/B" : "PC DISCONNECTED");
+      oled.drawString(0, 4, "A:REC B:PLAY"); shown = state;
+    }
+    return;
+  }
+  if (micdiag::poll((client && client.connected()) || fcweb::tx)) return;
   if (swd_poll()) { delay(0); return; }
   static uint32_t last_hello;
   update_display();
@@ -169,14 +200,17 @@ void loop() {
           if (++tries % 5 == 0) report_scan();          // 10 秒ごとに周りを探す
         }
       }
+      fcweb::poll(false);
       while (Serial.available()) {
-        Serial.read();
+        fcweb::receive(Serial.read());
         n_usb_in++;
       }
       delay(5);
       return;
     }
   }
+  // Finish an already-started FCFR before forwarding a new PC command.
+  if (fcweb::tx) { fcweb::poll(true); return; }
   // PC → カセット
   int n = client.available();
   if (n > 0) {

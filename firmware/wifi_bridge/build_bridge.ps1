@@ -1,4 +1,4 @@
-# ESP32-C6 の Wi-Fi ブリッジをビルドして書く。
+﻿# ESP32-C6 の Wi-Fi ブリッジをビルドして書く。
 #   pwsh -File build_bridge.ps1              ビルドして C6 に書く(COM ポートは VID 303A で探す)
 #   pwsh -File build_bridge.ps1 -Port COM9   COM ポートを指定
 #   pwsh -File build_bridge.ps1 -CheckOnly   書かずにビルドだけ(wifi_secrets.h が無ければ見本の値で)
@@ -24,6 +24,11 @@ $work = "$esp\work\wifi_bridge"
 New-Item -ItemType Directory -Force $work | Out-Null
 Copy-Item "$PSScriptRoot\wifi_bridge.ino" $work -Force
 Copy-Item "$PSScriptRoot\swd_bridge.h" $work -Force
+Copy-Item "$PSScriptRoot\mic_diagnostic.h" $work -Force
+Copy-Item "$PSScriptRoot\mic_recorder.h" $work -Force
+Copy-Item "$PSScriptRoot\web_browser_device.h" $work -Force
+if (-not (Test-Path "$PSScriptRoot\web_font.h")) { throw 'Generate private web_font.h with web_browser/make_device_font.py first' }
+Copy-Item "$PSScriptRoot\web_font.h" $work -Force
 if (Test-Path "$PSScriptRoot\wifi_secrets.h") {
     Copy-Item "$PSScriptRoot\wifi_secrets.h" $work -Force
 } elseif ($CheckOnly) {
@@ -32,7 +37,7 @@ if (Test-Path "$PSScriptRoot\wifi_secrets.h") {
 } else {
     throw 'wifi_secrets.h が無い。wifi_secrets.example.h を写して SSID とパスワードを書く'
 }
-$fqbn = 'esp32:esp32:esp32c6:CDCOnBoot=cdc,FlashSize=4M,FlashMode=dio,FlashFreq=40'   # このボード(C6 N4)は QIO/80MHz だとパーティションテーブルを読み違えて起動しない
+$fqbn = 'esp32:esp32:esp32c6:CDCOnBoot=cdc,FlashSize=4M,FlashMode=dio,FlashFreq=40,PartitionScheme=huge_app' # Japanese font + TLS use a 3 MiB application slot; no C6 OTA.
 & $cli --config-file $cfg compile --fqbn $fqbn --output-dir "$esp\work\out" $work
 if ($LASTEXITCODE) { throw 'ビルド失敗' }
 if ($CheckOnly) { return }

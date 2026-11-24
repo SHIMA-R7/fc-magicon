@@ -3,6 +3,11 @@
 pico-sdk 2.3.1、RP2350B(Waveshare Core2350B2)。ボード定義は `boards/fc_magicon.h`
 (SDK の `waveshare_core2350b.h` から、UART・I2C・SPI の既定ピンを外したもの。GPIO0/1 などはバスに使っているため)。
 
+## 2コンマイク録音・本体DAC再生
+
+2コンのAでマイク録音開始／停止、Bで直近の録音を本体の7ビットDACから再生。ESP32-C6とPCで録音・ノイズ低減・再生転送を行い、リレー付きの最終構成で録音・再生を実機確認しました。[配線・ビルド・確認範囲](../docs/microphone-record-replay-20261124.md)。録音データやWi-Fi認証情報、認証情報入りバイナリは公開しません。
+
+
 ## ビルド
 
 2026-10-10の電源保護対策版は `pwsh -File build_protected.ps1` でビルドし、`out-protected/` に保存する。既存の `out/` は旧バイナリのため、対策版を書き込むときは `out-protected/` を選ぶ。詳細は [対策記録](../docs/post_order_protection.md)。

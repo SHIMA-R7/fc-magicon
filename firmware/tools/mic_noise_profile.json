@@ -1,0 +1,59 @@
+{
+  "rate": 16000,
+  "version": 1,
+  "description": "C6 GPIO0, continuous ADC, UART 460800; persistent lines shared by two low-level recordings",
+  "tones": [
+    {
+      "hz": 745.154,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 1436.966,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 2182.187,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 2873.999,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 3619.155,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 3705.533,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 4311.006,
+      "bandwidth_hz": 10
+    },
+    {
+      "hz": 5056.116,
+      "bandwidth_hz": 16
+    },
+    {
+      "hz": 5801.352,
+      "bandwidth_hz": 16
+    },
+    {
+      "hz": 5887.702,
+      "bandwidth_hz": 16
+    },
+    {
+      "hz": 6493.103,
+      "bandwidth_hz": 16
+    },
+    {
+      "hz": 7238.281,
+      "bandwidth_hz": 16
+    },
+    {
+      "hz": 7324.761,
+      "bandwidth_hz": 16
+    }
+  ]
+}

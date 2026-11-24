@@ -32,7 +32,8 @@ static bool swd_uart_poll() {
   // A dedicated UART session starts with STX (0x02); Q returns to status logs.
   if (!swd_uart_active) {
     if (swd_active) return false;
-    while (Serial0.available() && Serial0.peek() != 2) Serial0.read();
+    // ETX belongs to the microphone diagnostic, consumed by the main loop.
+    while (Serial0.available() && Serial0.peek() != 2 && Serial0.peek() != 3) Serial0.read();
     if (Serial0.peek() != 2) return false;
     Serial0.read();
     gpio_set_level(SWD_DIO, 1);

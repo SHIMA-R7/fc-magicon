@@ -23,3 +23,7 @@ firmware/sim/**/youtube-U6Wlb18KLrI/
 *.rgb
 firmware/wifi_bridge/wifi_secrets.h
 firmware/magicon/static_image.h
+# Personal microphone recordings and generated controller ROM
+*.u16le
+recordings/
+firmware/mic_controller/rom.h
